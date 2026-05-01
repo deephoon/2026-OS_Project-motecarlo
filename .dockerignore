@@ -1,0 +1,7 @@
+sim
+src/*.o
+results/csv/*.csv
+results/raw/*
+!results/raw/.gitkeep
+!results/csv/.gitkeep
+.git

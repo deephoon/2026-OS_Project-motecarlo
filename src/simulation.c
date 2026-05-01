@@ -1,0 +1,150 @@
+#include "simulation.h"
+
+#include <limits.h>
+
+enum {
+    KMH_TO_MPS_NUM = 1000,
+    KMH_TO_MPS_DEN = 3600
+};
+
+typedef struct {
+    double ego_speed;
+    double front_speed;
+    double initial_distance;
+    double reaction_time;
+    double ego_deceleration;
+    double front_deceleration;
+    double road_factor;
+} TrialParams;
+
+typedef struct {
+    double ego_pos;
+    double front_pos;
+    double ego_speed;
+    double front_speed;
+} VehicleState;
+
+static double clamp_nonnegative(double value)
+{
+    return value < 0.0 ? 0.0 : value;
+}
+
+static unsigned int lcg_next(unsigned int *state)
+{
+    *state = (*state * 1664525u + 1013904223u);
+    return *state;
+}
+
+static double rand_double(unsigned int *state, double min, double max)
+{
+    unsigned int v = lcg_next(state);
+    double unit = (double)v / (double)UINT_MAX;
+    return min + (max - min) * unit;
+}
+
+static TrialParams trial_params_generate(unsigned int *seed)
+{
+    const double kmh_to_mps = (double)KMH_TO_MPS_NUM / (double)KMH_TO_MPS_DEN;
+    TrialParams params;
+
+    params.ego_speed = rand_double(seed, 60.0, 120.0) * kmh_to_mps;
+    params.front_speed = rand_double(seed, 40.0, 110.0) * kmh_to_mps;
+    params.initial_distance = rand_double(seed, 5.0, 100.0);
+    params.reaction_time = rand_double(seed, 0.5, 2.5);
+    params.ego_deceleration = rand_double(seed, 3.0, 9.0);
+    params.front_deceleration = rand_double(seed, 2.0, 10.0);
+    params.road_factor = rand_double(seed, 0.5, 1.0);
+    return params;
+}
+
+static VehicleState vehicle_state_init(const TrialParams *params)
+{
+    VehicleState state;
+
+    state.ego_pos = 0.0;
+    state.front_pos = params->initial_distance;
+    state.ego_speed = params->ego_speed;
+    state.front_speed = params->front_speed;
+    return state;
+}
+
+static RiskLevel classify_risk(int collided, double min_ttc)
+{
+    if (collided) {
+        return RISK_COLLISION;
+    }
+    if (min_ttc < 1.5) {
+        return RISK_HIGH;
+    }
+    if (min_ttc < 3.0) {
+        return RISK_MEDIUM;
+    }
+    if (min_ttc < 5.0) {
+        return RISK_LOW;
+    }
+    return RISK_SAFE;
+}
+
+static void advance_one_step(const TrialParams *params, VehicleState *state,
+                             double t, double dt)
+{
+    state->front_speed = clamp_nonnegative(
+        state->front_speed - params->front_deceleration * dt);
+    state->front_pos += state->front_speed * dt;
+
+    if (t >= params->reaction_time) {
+        state->ego_speed = clamp_nonnegative(
+            state->ego_speed - params->ego_deceleration *
+            params->road_factor * dt);
+    }
+    state->ego_pos += state->ego_speed * dt;
+}
+
+static double compute_ttc(const VehicleState *state, double large_ttc)
+{
+    const double epsilon = 1.0e-9;
+    double relative_distance = state->front_pos - state->ego_pos;
+    double relative_speed = state->ego_speed - state->front_speed;
+
+    if (relative_speed > epsilon && relative_distance > 0.0) {
+        return relative_distance / relative_speed;
+    }
+    return large_ttc;
+}
+
+unsigned int simulation_seed_for_trial(unsigned int base_seed, long trial_index)
+{
+    return base_seed ^ ((unsigned int)trial_index * 2654435761u);
+}
+
+RiskLevel run_trial(unsigned int *seed, int time_steps, int *collided_out)
+{
+    const double dt = 0.1;
+    const double large_ttc = 1.0e9;
+    TrialParams params = trial_params_generate(seed);
+    VehicleState state = vehicle_state_init(&params);
+    double min_ttc = large_ttc;
+    int collided = 0;
+
+    for (int step = 0; step < time_steps; ++step) {
+        double t = (double)step * dt;
+        double ttc;
+
+        advance_one_step(&params, &state, t, dt);
+        ttc = compute_ttc(&state, large_ttc);
+        if (ttc < min_ttc) {
+            min_ttc = ttc;
+        }
+
+        if (state.front_pos - state.ego_pos <= 0.0) {
+            collided = 1;
+            break;
+        }
+    }
+
+    if (collided_out != 0) {
+        *collided_out = collided;
+    }
+
+    return classify_risk(collided, min_ttc);
+}
