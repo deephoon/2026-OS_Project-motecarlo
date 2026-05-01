@@ -1,6 +1,6 @@
 # 2026 OS Project: Monte Carlo Car-Following Risk Simulation
 
-운영체제 과목 프로젝트를 위한 CPU-bound 병렬처리 실험 프로그램입니다.
+숭실대학교 전자정보공학부 운영체제 과목 프로젝트를 위한 CPU-bound 병렬처리 실험 프로그램입니다.
 
 주제는 **Child Process와 Multithread를 활용한 몬테카를로 기반 차량 추종 위험 시뮬레이션의 병렬처리 및 Synchronization 성능 분석**입니다.
 
