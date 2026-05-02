@@ -4,7 +4,7 @@
 
 주제는 **Child Process와 Multithread를 활용한 몬테카를로 기반 차량 추종 위험 시뮬레이션의 병렬처리 및 Synchronization 성능 분석**입니다.
 
-현재 구현은 **중간 발표 MVP** 범위에 맞춰 `sequential baseline`, `pthread multi-thread`, `nosync/mutex/local reduce synchronization 비교`, `CSV 실험 자동화`, `Docker Linux 실행 환경`을 제공합니다. 최종 발표에서는 child process, process/thread hybrid, dynamic task queue, CPU/memory 분석으로 확장합니다.
+현재 구현은 **중간발표 구현 범위**에 맞춰 `sequential baseline`, `pthread multi-thread`, `nosync/mutex/local reduce synchronization 비교`, `CSV 실험 자동화`, `Docker Linux 실행 환경`을 제공합니다. 최종 발표에서는 child process, process/thread hybrid, dynamic task queue, CPU/memory 분석으로 확장합니다.
 
 ## 프로젝트 목적
 
@@ -56,6 +56,26 @@ trial들은 서로 독립적이므로 thread 병렬화에 적합합니다. 파�
 ├── Dockerfile
 └── docker-compose.yml
 ```
+
+## 중간 발표자료
+
+중간 발표용 자료는 Markdown slide deck 형태로 정리했습니다.
+
+```text
+docs/midterm_presentation.md
+docs/capture_checklist.md
+docs/presentation_guide.md
+docs/linux_capture_guide.md
+docs/midterm_plan.md
+```
+
+- `docs/midterm_presentation.md`: 발표 슬라이드 원고
+- `docs/capture_checklist.md`: 슬라이드별 캡처 명령, 파일명, 발표 멘트, 리스크 대응
+- `docs/presentation_guide.md`: 슬라이드별 발표 멘트와 예상 질문 답변
+- `docs/linux_capture_guide.md`: Docker Ubuntu Linux 기준 캡처 실행 절차
+- `docs/midterm_plan.md`: 발표 구성과 실험 설계 요약
+
+Markdown slide deck은 Marp 같은 도구로 PDF/PPTX로 변환할 수 있습니다. 변환 도구가 없어도 내용을 그대로 발표자료에 옮길 수 있도록 슬라이드 단위로 구성했습니다.
 
 ## 실행 모델
 
@@ -259,23 +279,23 @@ results/csv/midterm_results.csv
 
 ## 현재 실험 결과 예시
 
-아래 값은 로컬 환경에서 `TRIALS=10000 scripts/run_midterm.sh`로 얻은 예시입니다. 실제 발표용 수치는 Docker Linux에서 다시 측정하는 것을 권장합니다.
+아래 값은 로컬 환경에서 `TRIALS=1000000 STEPS=50 scripts/run_midterm.sh`로 얻은 예시입니다. 실제 발표용 최종 수치는 Docker Linux에서 다시 측정하는 것을 권장합니다.
 
 | mode | sync | threads | trials | steps | time_sec | speedup | hist_sum | valid |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
-| seq | reduce | 4 | 10000 | 50 | 0.001257 | 1.000000 | 10000 | 1 |
-| thread | reduce | 1 | 10000 | 50 | 0.001881 | 0.668262 | 10000 | 1 |
-| thread | reduce | 2 | 10000 | 50 | 0.000606 | 2.074257 | 10000 | 1 |
-| thread | reduce | 4 | 10000 | 50 | 0.000317 | 3.965300 | 10000 | 1 |
-| thread | reduce | 8 | 10000 | 50 | 0.000253 | 4.968379 | 10000 | 1 |
-| thread | nosync | 4 | 10000 | 50 | 0.000328 | 3.832317 | 7877 | 0 |
-| thread | mutex | 4 | 10000 | 50 | 0.001216 | 1.033717 | 10000 | 1 |
-| thread | reduce | 4 | 10000 | 100 | 0.000453 | 2.774834 | 10000 | 1 |
+| seq | reduce | 4 | 1000000 | 50 | 0.114392 | 1.000000 | 1000000 | 1 |
+| thread | reduce | 1 | 1000000 | 50 | 0.102064 | 1.120787 | 1000000 | 1 |
+| thread | reduce | 2 | 1000000 | 50 | 0.053912 | 2.121828 | 1000000 | 1 |
+| thread | reduce | 4 | 1000000 | 50 | 0.032194 | 3.553209 | 1000000 | 1 |
+| thread | reduce | 8 | 1000000 | 50 | 0.020967 | 5.455812 | 1000000 | 1 |
+| thread | nosync | 4 | 1000000 | 50 | 0.036567 | 3.128285 | 800794 | 0 |
+| thread | mutex | 4 | 1000000 | 50 | 0.136491 | 0.838092 | 1000000 | 1 |
+| thread | reduce | 4 | 1000000 | 100 | 0.048148 | 2.375841 | 1000000 | 1 |
 
 관찰:
 
 - `reduce`는 thread 수가 증가할수록 실행시간이 감소하는 경향을 보입니다.
-- `nosync`는 빠르지만 `hist_sum=7877`, `valid=0`으로 결과가 깨졌습니다.
+- `nosync`는 빠르지만 `hist_sum=800794`, `valid=0`으로 결과가 깨졌습니다.
 - `mutex`는 정확하지만 매 trial마다 lock/unlock이 들어가 `reduce`보다 느립니다.
 - checksum은 `seq`, `mutex`, `reduce`에서 동일하게 유지되어 deterministic seed와 결과 재현성이 확인됩니다.
 
@@ -339,7 +359,7 @@ Dockerfile에는 `procps`, `sysstat`, `htop`, `time`을 포함했습니다.
 
 PDF 프로젝트 가이드는 child process, multiple threads, synchronization을 활용하고 다양한 조건에서 성능을 분석할 것을 요구합니다.
 
-현재 MVP는 중간 발표 범위에 맞춰 다음 항목을 충족합니다.
+현재 구현 범위는 중간 발표 범위에 맞춰 다음 항목을 충족합니다.
 
 - 같은 작업을 sequential과 pthread로 실행해 실행시간 비교
 - 1/2/4/8 thread 조건으로 core 활용 효과 관찰
@@ -365,7 +385,7 @@ PDF 프로젝트 가이드는 child process, multiple threads, synchronization�
 
 사용 목적:
 
-- C/pthread 기반 MVP 코드 작성
+- C/pthread 기반 현재 구현 코드 작성
 - Makefile, Dockerfile, 실험 스크립트 작성
 - 프로젝트 가이드 PDF 기준 적합성 점검
 - README 및 문서 정리
