@@ -46,7 +46,6 @@ static TrialParams trial_params_generate(unsigned int *seed)
 {
     const double kmh_to_mps = (double)KMH_TO_MPS_NUM / (double)KMH_TO_MPS_DEN;
     TrialParams params;
-
     params.ego_speed = rand_double(seed, 60.0, 120.0) * kmh_to_mps;
     params.front_speed = rand_double(seed, 40.0, 110.0) * kmh_to_mps;
     params.initial_distance = rand_double(seed, 5.0, 100.0);
@@ -60,29 +59,11 @@ static TrialParams trial_params_generate(unsigned int *seed)
 static VehicleState vehicle_state_init(const TrialParams *params)
 {
     VehicleState state;
-
     state.ego_pos = 0.0;
     state.front_pos = params->initial_distance;
     state.ego_speed = params->ego_speed;
     state.front_speed = params->front_speed;
     return state;
-}
-
-static RiskLevel classify_risk(int collided, double min_ttc)
-{
-    if (collided) {
-        return RISK_COLLISION;
-    }
-    if (min_ttc < 1.5) {
-        return RISK_HIGH;
-    }
-    if (min_ttc < 3.0) {
-        return RISK_MEDIUM;
-    }
-    if (min_ttc < 5.0) {
-        return RISK_LOW;
-    }
-    return RISK_SAFE;
 }
 
 static void advance_one_step(const TrialParams *params, VehicleState *state,
@@ -91,7 +72,6 @@ static void advance_one_step(const TrialParams *params, VehicleState *state,
     state->front_speed = clamp_nonnegative(
         state->front_speed - params->front_deceleration * dt);
     state->front_pos += state->front_speed * dt;
-
     if (t >= params->reaction_time) {
         state->ego_speed = clamp_nonnegative(
             state->ego_speed - params->ego_deceleration *
@@ -105,11 +85,19 @@ static double compute_ttc(const VehicleState *state, double large_ttc)
     const double epsilon = 1.0e-9;
     double relative_distance = state->front_pos - state->ego_pos;
     double relative_speed = state->ego_speed - state->front_speed;
-
     if (relative_speed > epsilon && relative_distance > 0.0) {
         return relative_distance / relative_speed;
     }
     return large_ttc;
+}
+
+static RiskLevel classify_risk(int collided, double min_ttc)
+{
+    if (collided) return RISK_COLLISION;
+    if (min_ttc < 1.5) return RISK_HIGH;
+    if (min_ttc < 3.0) return RISK_MEDIUM;
+    if (min_ttc < 5.0) return RISK_LOW;
+    return RISK_SAFE;
 }
 
 unsigned int simulation_seed_for_trial(unsigned int base_seed, long trial_index)
@@ -129,13 +117,11 @@ RiskLevel run_trial(unsigned int *seed, int time_steps, int *collided_out)
     for (int step = 0; step < time_steps; ++step) {
         double t = (double)step * dt;
         double ttc;
-
         advance_one_step(&params, &state, t, dt);
         ttc = compute_ttc(&state, large_ttc);
         if (ttc < min_ttc) {
             min_ttc = ttc;
         }
-
         if (state.front_pos - state.ego_pos <= 0.0) {
             collided = 1;
             break;
@@ -145,6 +131,17 @@ RiskLevel run_trial(unsigned int *seed, int time_steps, int *collided_out)
     if (collided_out != 0) {
         *collided_out = collided;
     }
-
     return classify_risk(collided, min_ttc);
+}
+
+void run_batch(const Config *cfg, const TaskBatch *batch, Result *out)
+{
+    result_init(out);
+    for (long i = batch->start_idx; i < batch->end_idx; ++i) {
+        unsigned int trial_seed = simulation_seed_for_trial(cfg->seed, i);
+        int collided = 0;
+        RiskLevel risk = run_trial(&trial_seed, batch->time_steps, &collided);
+        result_add_trial(out, risk, collided);
+    }
+    out->checksum = result_compute_checksum(out);
 }

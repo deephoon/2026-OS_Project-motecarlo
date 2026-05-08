@@ -11,16 +11,14 @@ void cli_print_usage(FILE *out, const char *program)
 {
     fprintf(out,
             "Usage: %s [options]\n"
-            "\n"
-            "Options:\n"
-            "  --mode <seq|thread>          Run mode (default: seq)\n"
-            "  --trials <int>               Number of Monte Carlo trials (default: 100000)\n"
-            "  --steps <int>                Time steps per trial (default: 50)\n"
-            "  --threads <int>              Thread count for thread mode (default: 4)\n"
-            "  --sync <nosync|mutex|reduce> Synchronization mode (default: reduce)\n"
-            "  --seed <int>                 Deterministic base seed (default: 42)\n"
-            "  --verbose                    Print human-readable summary to stderr\n"
-            "  --help                       Show this help text\n",
+            "  --mode <seq|thread|pipeline|process|hybrid>\n"
+            "  --schedule <static|queue>\n"
+            "  --merge <final|interactive>\n"
+            "  --trials <int> --steps <int> --threads <int>\n"
+            "  --processes <int> --batch-size <int> --queue-size <int>\n"
+            "  --sync <nosync|mutex|reduce> --ipc <pipe|shm>\n"
+            "  --enable-pipeline <0|1> --metrics-detail <0|1>\n"
+            "  --seed <int> --verbose --help\n",
             program);
 }
 
@@ -29,7 +27,6 @@ static int parse_long_arg(const char *text, long min_value, long max_value,
 {
     char *end = 0;
     long value;
-
     errno = 0;
     value = strtol(text, &end, 10);
     if (errno != 0 || end == text || *end != '\0' ||
@@ -46,13 +43,12 @@ static int require_value(int argc, int *index)
     return *index < argc ? 0 : -1;
 }
 
-static int parse_positive_int_option(int argc, char **argv, int *index,
-                                     int *out)
+static int parse_int_option(int argc, char **argv, int *index,
+                            long min_value, long max_value, int *out)
 {
     long value;
-
     if (require_value(argc, index) != 0 ||
-        parse_long_arg(argv[*index], 1, INT_MAX, &value) != 0) {
+        parse_long_arg(argv[*index], min_value, max_value, &value) != 0) {
         return -1;
     }
     *out = (int)value;
@@ -63,49 +59,45 @@ int cli_parse_args(int argc, char **argv, Config *cfg)
 {
     for (int i = 1; i < argc; ++i) {
         const char *arg = argv[i];
-
         if (strcmp(arg, "--help") == 0) {
             cli_print_usage(stdout, argv[0]);
             exit(0);
-        }
-        if (strcmp(arg, "--verbose") == 0) {
+        } else if (strcmp(arg, "--verbose") == 0) {
             cfg->verbose = 1;
         } else if (strcmp(arg, "--mode") == 0) {
-            if (require_value(argc, &i) != 0 ||
-                parse_run_mode(argv[i], &cfg->mode) != 0) {
-                return -1;
-            }
+            if (require_value(argc, &i) != 0 || parse_run_mode(argv[i], &cfg->mode) != 0) return -1;
+        } else if (strcmp(arg, "--schedule") == 0) {
+            if (require_value(argc, &i) != 0 || parse_schedule_mode(argv[i], &cfg->schedule_mode) != 0) return -1;
+        } else if (strcmp(arg, "--merge") == 0) {
+            if (require_value(argc, &i) != 0 || parse_merge_mode(argv[i], &cfg->merge_mode) != 0) return -1;
         } else if (strcmp(arg, "--sync") == 0) {
-            if (require_value(argc, &i) != 0 ||
-                parse_sync_mode(argv[i], &cfg->sync_mode) != 0) {
-                return -1;
-            }
+            if (require_value(argc, &i) != 0 || parse_sync_mode(argv[i], &cfg->sync_mode) != 0) return -1;
+        } else if (strcmp(arg, "--ipc") == 0) {
+            if (require_value(argc, &i) != 0 || parse_ipc_mode(argv[i], &cfg->ipc_mode) != 0) return -1;
         } else if (strcmp(arg, "--trials") == 0) {
-            if (require_value(argc, &i) != 0 ||
-                parse_long_arg(argv[i], 1, LONG_MAX, &cfg->trials) != 0) {
-                return -1;
-            }
+            if (require_value(argc, &i) != 0 || parse_long_arg(argv[i], 1, LONG_MAX, &cfg->trials) != 0) return -1;
         } else if (strcmp(arg, "--steps") == 0) {
-            if (parse_positive_int_option(argc, argv, &i,
-                                          &cfg->time_steps) != 0) {
-                return -1;
-            }
+            if (parse_int_option(argc, argv, &i, 1, INT_MAX, &cfg->time_steps) != 0) return -1;
         } else if (strcmp(arg, "--threads") == 0) {
-            if (parse_positive_int_option(argc, argv, &i,
-                                          &cfg->threads) != 0) {
-                return -1;
-            }
+            if (parse_int_option(argc, argv, &i, 1, INT_MAX, &cfg->threads) != 0) return -1;
+        } else if (strcmp(arg, "--processes") == 0) {
+            if (parse_int_option(argc, argv, &i, 1, INT_MAX, &cfg->processes) != 0) return -1;
+        } else if (strcmp(arg, "--batch-size") == 0) {
+            if (parse_int_option(argc, argv, &i, 1, INT_MAX, &cfg->batch_size) != 0) return -1;
+        } else if (strcmp(arg, "--queue-size") == 0) {
+            if (parse_int_option(argc, argv, &i, 1, INT_MAX, &cfg->queue_size) != 0) return -1;
+        } else if (strcmp(arg, "--enable-pipeline") == 0) {
+            if (parse_int_option(argc, argv, &i, 0, 1, &cfg->enable_pipeline) != 0) return -1;
+        } else if (strcmp(arg, "--metrics-detail") == 0) {
+            if (parse_int_option(argc, argv, &i, 0, 1, &cfg->metrics_detail) != 0) return -1;
         } else if (strcmp(arg, "--seed") == 0) {
             long value;
             if (require_value(argc, &i) != 0 ||
-                parse_long_arg(argv[i], 0, UINT_MAX, &value) != 0) {
-                return -1;
-            }
+                parse_long_arg(argv[i], 0, UINT_MAX, &value) != 0) return -1;
             cfg->seed = (unsigned int)value;
         } else {
             return -1;
         }
     }
-
     return config_validate(cfg) ? 0 : -1;
 }

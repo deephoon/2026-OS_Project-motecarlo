@@ -2,9 +2,10 @@
 #define SEQUENTIAL_H
 
 #include "config.h"
+#include "metrics.h"
 #include "result.h"
 
-/* Runs the sequential baseline and records wall-clock elapsed time. */
 int run_sequential(const Config *cfg, Result *out, double *elapsed_out);
+int run_sequential_metrics(const Config *cfg, Result *out, StageMetrics *metrics);
 
 #endif

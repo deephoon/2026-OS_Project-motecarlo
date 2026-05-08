@@ -2,9 +2,10 @@
 #define THREAD_MODE_H
 
 #include "config.h"
+#include "metrics.h"
 #include "result.h"
 
-/* Runs the pthread implementation with the configured synchronization mode. */
 int run_thread_mode(const Config *cfg, Result *out, double *elapsed_out);
+int run_thread_mode_metrics(const Config *cfg, Result *out, StageMetrics *metrics);
 
 #endif

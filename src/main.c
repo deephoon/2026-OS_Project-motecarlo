@@ -1,5 +1,9 @@
 #include "cli.h"
 #include "config.h"
+#include "hybrid_mode.h"
+#include "metrics.h"
+#include "pipeline_mode.h"
+#include "process_mode.h"
 #include "result.h"
 #include "sequential.h"
 #include "sync.h"
@@ -7,33 +11,84 @@
 
 #include <stdio.h>
 
-static void print_verbose_summary(const Config *cfg, const Result *result,
-                                  double time_sec, int valid)
+static void print_final_header(void)
 {
-    fprintf(stderr, "mode=%s sync=%s threads=%d trials=%ld steps=%d\n",
+    puts("mode,schedule,merge,sync,processes,threads,trials,steps,batch_size,"
+         "queue_size,time_total,time_pre,time_compute,time_sync,time_merge,"
+         "time_post,speedup,efficiency,sequential_fraction_estimate,"
+         "compute_ratio,sync_overhead_ratio,merge_overhead_ratio,"
+         "throughput_batches_per_sec,total_trials,collision_count,hist_sum,"
+         "checksum,valid,notes");
+}
+
+static void print_final_row(const Config *cfg, const StageMetrics *m,
+                            const Result *r, int valid, const char *notes)
+{
+    double total = metrics_total(m);
+    double speedup = 0.0;
+    double efficiency = 0.0;
+    int workers = cfg->mode == MODE_PROCESS ? cfg->processes :
+                  cfg->mode == MODE_HYBRID ? cfg->processes * cfg->threads :
+                  cfg->threads;
+    (void)speedup;
+    (void)efficiency;
+    printf("%s,%s,%s,%s,%d,%d,%ld,%d,%d,%d,%.6f,%.6f,%.6f,%.6f,%.6f,"
+           "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%ld,%ld,%ld,%lu,%d,%s\n",
+           run_mode_to_string(cfg->mode),
+           schedule_mode_to_string(cfg->schedule_mode),
+           merge_mode_to_string(cfg->merge_mode),
+           sync_mode_to_string(cfg->sync_mode),
+           cfg->processes,
+           cfg->threads,
+           cfg->trials,
+           cfg->time_steps,
+           cfg->batch_size,
+           cfg->queue_size,
+           total,
+           m->t_pre,
+           m->t_compute,
+           m->t_sync,
+           m->t_merge,
+           m->t_post,
+           speedup,
+           workers > 0 ? efficiency / (double)workers : 0.0,
+           metrics_sequential_fraction_estimate(m),
+           metrics_compute_ratio(m),
+           metrics_sync_ratio(m),
+           metrics_merge_ratio(m),
+           metrics_throughput_batches(m),
+           r->total_trials,
+           r->collision_count,
+           result_hist_sum(r),
+           r->checksum,
+           valid,
+           notes);
+}
+
+static void print_verbose_summary(const Config *cfg, const Result *r,
+                                  const StageMetrics *m, int valid)
+{
+    fprintf(stderr, "mode=%s schedule=%s merge=%s sync=%s\n",
             run_mode_to_string(cfg->mode),
-            sync_mode_to_string(cfg->sync_mode),
-            cfg->threads,
-            cfg->trials,
-            cfg->time_steps);
-    fprintf(stderr, "time_sec=%.6f total_trials=%ld hist_sum=%ld valid=%d\n",
-            time_sec,
-            result->total_trials,
-            result_hist_sum(result),
-            valid);
-    fprintf(stderr, "collisions=%ld checksum=%lu\n",
-            result->collision_count,
-            result->checksum);
+            schedule_mode_to_string(cfg->schedule_mode),
+            merge_mode_to_string(cfg->merge_mode),
+            sync_mode_to_string(cfg->sync_mode));
+    fprintf(stderr, "total=%.6f pre=%.6f compute=%.6f sync=%.6f merge=%.6f post=%.6f\n",
+            metrics_total(m), m->t_pre, m->t_compute, m->t_sync,
+            m->t_merge, m->t_post);
+    fprintf(stderr, "trials=%ld hist_sum=%ld collisions=%ld checksum=%lu valid=%d\n",
+            r->total_trials, result_hist_sum(r), r->collision_count,
+            r->checksum, valid);
 }
 
 int main(int argc, char **argv)
 {
     Config cfg;
     Result result;
-    double time_sec = 0.0;
-    double speedup = 1.0;
+    StageMetrics metrics;
+    int rc = 0;
     int valid;
-    int rc;
+    const char *notes = "ok";
 
     config_set_defaults(&cfg);
     if (cli_parse_args(argc, argv, &cfg) != 0) {
@@ -41,11 +96,29 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    result_init(&result);
-    if (cfg.mode == MODE_SEQ) {
-        rc = run_sequential(&cfg, &result, &time_sec);
-    } else {
-        rc = run_thread_mode(&cfg, &result, &time_sec);
+    switch (cfg.mode) {
+    case MODE_SEQ:
+        rc = run_sequential_metrics(&cfg, &result, &metrics);
+        break;
+    case MODE_THREAD:
+        if (cfg.schedule_mode == SCHEDULE_QUEUE) {
+            rc = run_pipeline_mode(&cfg, &result, &metrics);
+        } else {
+            rc = run_thread_mode_metrics(&cfg, &result, &metrics);
+        }
+        break;
+    case MODE_PIPELINE:
+        cfg.schedule_mode = SCHEDULE_QUEUE;
+        rc = run_pipeline_mode(&cfg, &result, &metrics);
+        break;
+    case MODE_PROCESS:
+        rc = run_process_mode(&cfg, &result, &metrics);
+        if (cfg.ipc_mode == IPC_SHM) notes = "shm_todo";
+        break;
+    case MODE_HYBRID:
+        rc = run_hybrid_mode(&cfg, &result, &metrics);
+        if (cfg.ipc_mode == IPC_SHM) notes = "shm_todo";
+        break;
     }
 
     if (rc != 0) {
@@ -54,11 +127,15 @@ int main(int argc, char **argv)
     }
 
     valid = result_validate(&result, cfg.trials);
-    result_print_csv_row(&cfg, time_sec, speedup, &result, valid);
-
-    if (cfg.verbose) {
-        print_verbose_summary(&cfg, &result, time_sec, valid);
+    if (cfg.metrics_detail) {
+        print_final_header();
+        print_final_row(&cfg, &metrics, &result, valid, notes);
+    } else {
+        result_print_csv_row(&cfg, metrics_total(&metrics), 1.0, &result, valid);
     }
 
+    if (cfg.verbose) {
+        print_verbose_summary(&cfg, &result, &metrics, valid);
+    }
     return 0;
 }

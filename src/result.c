@@ -6,10 +6,7 @@
 
 void result_init(Result *r)
 {
-    if (r == 0) {
-        return;
-    }
-
+    if (r == 0) return;
     r->total_trials = 0;
     r->collision_count = 0;
     r->checksum = 0;
@@ -20,10 +17,7 @@ void result_init(Result *r)
 
 void result_add_trial(Result *r, RiskLevel risk, int collided)
 {
-    if (r == 0 || risk < 0 || risk >= RISK_BUCKETS) {
-        return;
-    }
-
+    if (r == 0 || risk < 0 || risk >= RISK_BUCKETS) return;
     r->total_trials += 1;
     if (collided) {
         r->collision_count += 1;
@@ -33,10 +27,7 @@ void result_add_trial(Result *r, RiskLevel risk, int collided)
 
 void result_merge(Result *dst, const Result *src)
 {
-    if (dst == 0 || src == 0) {
-        return;
-    }
-
+    if (dst == 0 || src == 0) return;
     dst->total_trials += src->total_trials;
     dst->collision_count += src->collision_count;
     for (int i = 0; i < RISK_BUCKETS; ++i) {
@@ -47,11 +38,7 @@ void result_merge(Result *dst, const Result *src)
 long result_hist_sum(const Result *r)
 {
     long sum = 0;
-
-    if (r == 0) {
-        return 0;
-    }
-
+    if (r == 0) return 0;
     for (int i = 0; i < RISK_BUCKETS; ++i) {
         sum += r->histogram[i];
     }
@@ -61,40 +48,25 @@ long result_hist_sum(const Result *r)
 unsigned long result_compute_checksum(const Result *r)
 {
     unsigned long hash = 1469598103934665603ul;
-
-    if (r == 0) {
-        return 0;
-    }
-
+    if (r == 0) return 0;
     hash ^= (unsigned long)r->total_trials;
     hash *= 1099511628211ul;
     hash ^= (unsigned long)r->collision_count;
     hash *= 1099511628211ul;
-
     for (int i = 0; i < RISK_BUCKETS; ++i) {
         hash ^= (unsigned long)r->histogram[i] + (unsigned long)(i + 1);
         hash *= 1099511628211ul;
     }
-
     return hash;
 }
 
 int result_validate(const Result *r, long expected_trials)
 {
-    if (r == 0 || expected_trials <= 0) {
-        return 0;
-    }
-
-    if (r->total_trials != expected_trials) {
-        return 0;
-    }
-    if (result_hist_sum(r) != expected_trials) {
-        return 0;
-    }
-    if (r->collision_count < 0 || r->collision_count > expected_trials) {
-        return 0;
-    }
-    return 1;
+    if (r == 0 || expected_trials <= 0) return 0;
+    return r->total_trials == expected_trials &&
+           result_hist_sum(r) == expected_trials &&
+           r->collision_count >= 0 &&
+           r->collision_count <= expected_trials;
 }
 
 void result_print_csv_header(void)

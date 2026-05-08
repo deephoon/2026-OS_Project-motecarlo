@@ -1,7 +1,6 @@
 sim
-src/*.o
-results/csv/*.csv
+*.o
 results/raw/*
-!results/raw/.gitkeep
-!results/csv/.gitkeep
+results/csv/*
 .git
+.DS_Store
