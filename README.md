@@ -35,7 +35,40 @@
 | process와 thread 역할이 구분되어야 함 | hybrid mode에서 process는 큰 simulation group, thread는 내부 batch 계산 담당 |
 | CPU utilization과 성능 지표가 필요함 | Docker Linux, `pidstat`, `/usr/bin/time -v`, CSV 기반 성능 분석 문서화 |
 
-## 3. 전체 시스템 구조
+## 3. 현재 완료 상태와 현실적인 판단
+
+현재 프로젝트는 중간발표 MVP를 넘어 최종 발표에서 요구되는 OS 요소를 코드로 보여줄 수 있는 단계까지 왔다. 다만 성능 결론을 강하게 주장하기에는 아직 반복 측정과 후처리 분석이 부족하다.
+
+완료된 내용:
+
+- `seq`, `thread`, `pipeline`, `process`, `hybrid` 실행 모드가 CLI에서 선택 가능하다.
+- `thread` 모드는 `nosync`, `mutex`, `reduce`를 지원해 race condition과 synchronization overhead를 비교할 수 있다.
+- `pipeline` 모드는 bounded task queue와 merge queue를 사용한다.
+- `interactive merge`는 aggregator thread를 통해 worker partial result를 실행 중간에 병합한다.
+- `process` 모드는 `fork()`와 pipe IPC로 child process 결과를 parent가 수집한다.
+- `hybrid` 모드는 child process 내부에서 pthread worker를 실행한다.
+- 모든 주요 모드는 `hist_sum`, `checksum`, `valid`로 정확성 검증이 가능하다.
+- CSV에는 stage별 시간과 throughput 분석에 필요한 필드가 출력된다.
+- Docker Linux 환경과 CPU/memory 관찰 도구 사용 방법이 정리되어 있다.
+
+아직 보완해야 하는 내용:
+
+- 단일 `./sim` 실행의 `speedup`, `efficiency`는 현재 placeholder다. 최종 보고서에서는 sequential row의 `time_total`을 기준으로 후처리 계산해야 한다.
+- `scripts/run_final.sh`는 최종 실험 row를 모으는 스크립트다. 평균, 최소, 표준편차 summary CSV는 아직 자동 생성하지 않는다.
+- 10,000 trials 결과는 기능 검증용이다. 실행 시간이 너무 짧아 scheduling noise가 크므로 성능 결론 근거로 쓰기 어렵다.
+- 최종 성능 표는 최소 100,000 trials 이상, 가능하면 1,000,000 trials 이상에서 여러 번 반복 측정해야 한다.
+- shared memory IPC, semaphore 비교, perf 기반 자동 분석은 TODO로 남아 있다.
+
+보고서에서 방어 가능한 결론은 다음 방향이어야 한다.
+
+- `thread + reduce`는 hot loop에서 shared write를 제거하므로 가장 실용적인 baseline이다.
+- `mutex`는 정확하지만 lock contention을 보여주는 비교군이다.
+- `nosync`는 빠를 수 있어도 invalid 결과가 나올 수 있는 race condition 실험이다.
+- `process`는 격리성이 있지만 `fork`, pipe, `waitpid` overhead가 있다.
+- `hybrid`는 process와 thread의 역할 분리를 설명하기 좋지만 작은 workload에서는 과설계일 수 있다.
+- `pipeline interactive`는 실시간 병합 구조를 보여주지만 queue와 condition variable overhead가 추가된다.
+
+## 4. 전체 시스템 구조
 
 ```text
 CLI Config
@@ -71,7 +104,7 @@ Post-processing Stage
 CSV Output
 ```
 
-## 4. Simulation Model
+## 5. Simulation Model
 
 각 trial은 하나의 차량 추종 상황을 의미한다.
 
@@ -98,7 +131,7 @@ trial은 서로 독립적이다. 따라서 thread/process 단위로 나누어 �
 trial_seed = base_seed ^ (trial_index * 2654435761u)
 ```
 
-## 5. 실행 모드
+## 6. 실행 모드
 
 | Mode | CLI | 설명 |
 | --- | --- | --- |
@@ -108,7 +141,7 @@ trial_seed = base_seed ^ (trial_index * 2654435761u)
 | Process | `--mode process` | parent가 child process를 fork하고 pipe로 결과 수신 |
 | Hybrid | `--mode hybrid` | child process 내부에서 pthread worker 실행 |
 
-## 6. Synchronization 비교
+## 7. Synchronization 비교
 
 | Sync Mode | 구현 방식 | 목적 |
 | --- | --- | --- |
@@ -118,7 +151,7 @@ trial_seed = base_seed ^ (trial_index * 2654435761u)
 
 `nosync`는 의도적으로 안전하지 않은 모드다. 여러 thread가 동시에 `histogram`, `total_trials`, `collision_count`를 갱신하기 때문에 lost update가 발생할 수 있다. 이 경우 `hist_sum != trials`, `valid=0`이 나올 수 있으며, 이는 synchronization 필요성을 보여주는 실험 결과다.
 
-## 7. Final Reduce와 Interactive Merge
+## 8. Final Reduce와 Interactive Merge
 
 | Merge Mode | 설명 |
 | --- | --- |
@@ -127,7 +160,7 @@ trial_seed = base_seed ^ (trial_index * 2654435761u)
 
 interactive merge는 현실적인 producer-consumer 구조를 보여주기 위한 방식이다. 계산 중간에 결과가 계속 병합되므로 pipeline 구조 설명에 적합하다. 단, merge queue synchronization overhead가 추가되므로 항상 더 빠른 구조는 아니며, final reduce와 비교 분석해야 한다.
 
-## 8. Task Queue 설계
+## 9. Task Queue 설계
 
 `TaskQueue`와 `MergeQueue`는 bounded queue로 구현했다.
 
@@ -145,7 +178,7 @@ pthread_cond_t not_full
 - condition variable은 queue가 비어 있거나 가득 찬 경우 worker/producer를 sleep 상태로 보낸다.
 - semaphore는 사용하지 않았다. queue 상태 보호와 wait/signal 조건 표현이 모두 필요하므로, 이번 구현에서는 mutex + condition variable이 더 직접적이고 설명하기 쉽다.
 
-## 9. Process Mode
+## 10. Process Mode
 
 Process mode는 `fork()`와 pipe IPC를 사용한다.
 
@@ -169,7 +202,7 @@ Process mode는 `fork()`와 pipe IPC를 사용한다.
 
 현재 IPC는 `Result` 구조체를 pipe로 전달한다. 동일한 binary 내부에서 parent/child가 같은 구조체 layout을 사용하므로 프로젝트 실험용으로 충분하다. shared memory IPC는 TODO로 남겨두었다.
 
-## 10. Hybrid Mode
+## 11. Hybrid Mode
 
 Hybrid mode는 process와 thread의 역할을 분리한다.
 
@@ -182,7 +215,7 @@ Hybrid mode는 process와 thread의 역할을 분리한다.
 
 즉, process는 큰 작업 단위 분리와 IPC 병합을 보여주고, thread는 process 내부의 세부 계산 병렬화를 담당한다.
 
-## 11. CLI 옵션
+## 12. CLI 옵션
 
 ```text
 --mode <seq|thread|pipeline|process|hybrid>
@@ -221,7 +254,7 @@ seed=42
 metrics_detail=1
 ```
 
-## 12. 빌드 방법
+## 13. 빌드 방법
 
 ```sh
 make clean
@@ -235,7 +268,7 @@ make test
 gcc -std=c11 -O2 -Wall -Wextra -pthread -Iinclude
 ```
 
-## 13. 실행 예시
+## 14. 실행 예시
 
 Sequential baseline:
 
@@ -274,7 +307,7 @@ Hybrid mode:
 ./sim --mode hybrid --processes 2 --threads 2 --trials 10000 --steps 30 --ipc pipe --seed 42
 ```
 
-## 14. 최종 실험 자동화
+## 15. 최종 실험 자동화
 
 ```sh
 chmod +x scripts/run_final.sh
@@ -304,7 +337,7 @@ TRIALS=1000000 STEPS=50 scripts/run_final.sh
 | Process 2/4 | child process 성능 |
 | Hybrid 2x2 / 2x4 | process + thread 조합 |
 
-## 15. CSV 출력 필드
+## 16. CSV 출력 필드
 
 `final_results.csv`는 다음 필드를 출력한다.
 
@@ -352,7 +385,7 @@ merge_overhead_ratio = T_merge / T_total
 throughput = processed_batches / T_total
 ```
 
-## 16. Docker Linux 실행 방법
+## 17. Docker Linux 실행 방법
 
 최종 측정 기준은 Docker Ubuntu Linux다. macOS에서 개발할 수는 있지만, 발표용 수치는 Linux 컨테이너에서 다시 측정하는 것을 권장한다.
 
@@ -395,7 +428,7 @@ Docker image에는 다음 도구가 포함된다.
 | `/usr/bin/time` | memory / user time / system time 측정 |
 | `htop` | optional monitoring |
 
-## 17. CPU Utilization 캡처
+## 18. CPU Utilization 캡처
 
 긴 workload를 실행한 상태에서 별도 터미널로 CPU 사용률을 캡처한다.
 
@@ -425,7 +458,7 @@ memory usage까지 확인:
   --trials 1000000 --steps 100 --ipc pipe --seed 42
 ```
 
-## 18. 결과 해석 방향
+## 19. 결과 해석 방향
 
 | 관찰 결과 | 해석 |
 | --- | --- |
@@ -439,7 +472,7 @@ memory usage까지 확인:
 | process가 thread보다 느릴 수 있음 | fork/IPC/waitpid overhead |
 | hybrid 성능이 workload에 따라 달라짐 | process overhead와 thread 병렬성의 trade-off |
 
-## 19. Trouble Shooting
+## 20. Trouble Shooting
 
 | 문제 | 해결 |
 | --- | --- |
@@ -450,7 +483,7 @@ memory usage까지 확인:
 | `--ipc shm` 실행 실패 | shared memory는 TODO 확장 항목 |
 | 8 threads가 더 느림 | core 수 한계, scheduling overhead, context switching 분석 필요 |
 
-## 20. 현재 구현 완료 범위
+## 21. 현재 구현 완료 범위
 
 | 항목 | 상태 |
 | --- | --- |
@@ -471,7 +504,7 @@ memory usage까지 확인:
 | Docker Linux 환경 | 완료 |
 | capture checklist | 완료 |
 
-## 21. TODO 및 제한사항
+## 22. TODO 및 제한사항
 
 | 항목 | 상태 |
 | --- | --- |
