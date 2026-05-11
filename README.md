@@ -1,121 +1,119 @@
-# Monte Carlo 기반 차량 추종 위험 시뮬레이션
+# 🚗 Monte Carlo 기반 차량 추종 위험 시뮬레이션
 
-운영체제 프로젝트: CPU-bound 병렬처리 및 Synchronization 성능 분석
+> 운영체제 프로젝트: **CPU-bound 병렬처리, Synchronization, Process/Thread/IPC 성능 분석**
 
-이 프로젝트는 실제 차량 시뮬레이터를 만드는 것이 아니다. 차량 추종 상황은 운영체제 개념을 실험하기 위한 CPU-bound 반복 계산 모델로 사용된다. 핵심은 `child process`, `pthread`, `synchronization`, `race condition`, `mutex`, `condition variable`, `task queue`, `pipeline`, `IPC`, `local reduce`, stage별 성능 측정, throughput, process/thread/hybrid 성능 비교를 코드와 실험 결과로 보여주는 것이다.
+이 프로젝트는 실제 차량 시뮬레이터를 만드는 것이 아닙니다.  
+차량 추종 상황을 **독립적인 Monte Carlo trial**로 모델링하고, 같은 계산을 여러 OS 실행 구조로 수행하면서 정확성, 동기화 비용, 병렬화 효율, IPC overhead를 비교하는 실험 프로젝트입니다.
 
-## 1. 프로젝트 목적
+핵심 키워드:
 
-동일한 Monte Carlo 차량 추종 위험 계산을 여러 실행 구조로 수행하고, 정확성과 성능의 trade-off를 분석한다.
+`pthread` · `fork()` · `pipe IPC` · `mutex` · `condition variable` · `task queue` · `pipeline` · `local reduce` · `interactive merge` · `checksum validation`
 
-| 분석 대상 | 구현 내용 |
+---
+
+## ✅ 현재 한 줄 요약
+
+중간발표 당시에는 `seq/thread` 중심의 synchronization 비교가 핵심이었고, 현재는 최종 발표 요구사항에 맞춰 **Process / Hybrid / Pipeline / IPC / Interactive Merge 구조까지 확장**되었습니다.
+
+| 구분 | 중간발표 | 현재 상태 |
+| --- | --- | --- |
+| 실행 모드 | `seq`, `thread` | `seq`, `thread`, `pipeline`, `process`, `hybrid` |
+| 동기화 | `nosync`, `mutex`, `reduce` | 유지 + queue/merge synchronization 추가 |
+| 작업 분배 | static partition | static partition + bounded task queue |
+| 결과 병합 | final reduce 중심 | final reduce + interactive merge |
+| Process | 계획 단계 | `fork()` 기반 구현 |
+| IPC | 계획 단계 | pipe 기반 child result 전달 |
+| Hybrid | 계획 단계 | process 내부 pthread worker |
+| 성능 지표 | 실행시간 중심 | stage time, throughput, validation CSV |
+
+---
+
+## 🎯 프로젝트 목표
+
+같은 CPU-bound Monte Carlo 계산을 다양한 OS 구조로 실행하고, 다음 질문에 답하는 것이 목표입니다.
+
+| 질문 | 실험으로 보여주는 내용 |
 | --- | --- |
-| Sequential baseline | 단일 스레드 순차 실행 기준 성능 |
-| Pthread multithread | static partition 기반 thread 병렬 실행 |
-| Synchronization 비교 | `nosync`, `mutex`, `local reduce` 비교 |
-| Task queue scheduling | mutex + condition variable 기반 bounded queue |
-| Pipeline 구조 | pre-processing, worker, merge, post-processing stage 분리 |
-| Interactive merge | worker가 batch 결과를 만들 때마다 aggregator가 병합 |
-| Child process | `fork()` 기반 process mode |
-| IPC | pipe 기반 child result 전달 |
-| Hybrid mode | child process 내부에서 pthread worker 실행 |
-| 성능 분석 | stage별 시간, throughput, validation, Amdahl’s Law 분석 지표 |
+| Thread를 늘리면 항상 빨라지는가? | thread count별 실행시간과 overhead 비교 |
+| Lock 없이 공유 결과를 갱신하면 어떻게 되는가? | `nosync` race condition과 `valid=0` 가능성 |
+| Mutex는 정확하지만 왜 느릴 수 있는가? | per-trial lock contention |
+| Local reduce는 왜 유리한가? | hot loop에서 shared write 제거 |
+| Process는 thread보다 좋은가? | 격리성 vs `fork`/IPC overhead |
+| Hybrid 구조는 언제 의미가 있는가? | process와 thread 역할 분리 |
+| Interactive merge는 항상 빠른가? | merge queue와 aggregator overhead 분석 |
 
-## 2. 중간발표 이후 반영한 피드백
+---
 
-중간발표 구현은 thread와 synchronization 비교 중심이었다. 최종 구조에서는 교수님 피드백을 반영하여 단순히 병렬 계산만 수행하는 구조가 아니라, 실제 시스템처럼 전처리, 작업 큐, 병렬 worker, 중간 병합, 후처리, IPC 병합이 드러나도록 확장했다.
+## 🧩 구현된 기능
 
-| 교수님 피드백 | 반영 내용 |
-| --- | --- |
-| 계산 시작 즉시 병렬화되는 구조가 너무 단순함 | Pre-processing / Task queue / Merge / Post-processing stage 추가 |
-| Amdahl’s Law 분석이 가능해야 함 | `T_pre`, `T_compute`, `T_sync`, `T_merge`, `T_post`, `T_total` 출력 |
-| mutex만으로 queue empty/full 처리가 부족함 | `pthread_mutex_t` + `pthread_cond_t` 기반 bounded queue 구현 |
-| reduce 방식이 너무 단순함 | final reduce 외에 interactive merge와 aggregator thread 추가 |
-| child process가 의미 있게 사용되어야 함 | `fork()` 기반 process mode와 pipe IPC 구현 |
-| process와 thread 역할이 구분되어야 함 | hybrid mode에서 process는 큰 simulation group, thread는 내부 batch 계산 담당 |
-| CPU utilization과 성능 지표가 필요함 | Docker Linux, `pidstat`, `/usr/bin/time -v`, CSV 기반 성능 분석 문서화 |
+| 기능 | 상태 | 설명 |
+| --- | --- | --- |
+| Sequential baseline | ✅ 완료 | 단일 thread 기준 실행 |
+| Pthread thread mode | ✅ 완료 | static partition 기반 thread 병렬화 |
+| `nosync` | ✅ 완료 | race condition 관찰용 |
+| `mutex` | ✅ 완료 | shared result 보호 |
+| `reduce` | ✅ 완료 | thread-local result 후 병합 |
+| Task queue | ✅ 완료 | mutex + condition variable 기반 bounded queue |
+| Pipeline mode | ✅ 완료 | batch 생성, queue, worker, merge stage |
+| Final merge | ✅ 완료 | worker 종료 후 한 번에 병합 |
+| Interactive merge | ✅ 완료 | aggregator thread가 실행 중간 병합 |
+| Process mode | ✅ 완료 | `fork()` 기반 child process 실행 |
+| Pipe IPC | ✅ 완료 | child result를 parent로 전달 |
+| Hybrid mode | ✅ 완료 | child process 내부 pthread worker |
+| CSV metrics | ✅ 완료 | stage별 시간, throughput, validation 출력 |
+| Docker Linux 환경 | ✅ 완료 | Ubuntu 기반 재현 환경 |
+| Shared memory IPC | 🚧 TODO | `--ipc shm`은 확장 예정 |
+| 반복 평균 summary 자동화 | 🚧 TODO | 현재는 raw CSV 수집 중심 |
 
-## 3. 현재 완료 상태와 현실적인 판단
+---
 
-현재 프로젝트는 중간발표 MVP를 넘어 최종 발표에서 요구되는 OS 요소를 코드로 보여줄 수 있는 단계까지 왔다. 다만 성능 결론을 강하게 주장하기에는 아직 반복 측정과 후처리 분석이 부족하다.
-
-완료된 내용:
-
-- `seq`, `thread`, `pipeline`, `process`, `hybrid` 실행 모드가 CLI에서 선택 가능하다.
-- `thread` 모드는 `nosync`, `mutex`, `reduce`를 지원해 race condition과 synchronization overhead를 비교할 수 있다.
-- `pipeline` 모드는 bounded task queue와 merge queue를 사용한다.
-- `interactive merge`는 aggregator thread를 통해 worker partial result를 실행 중간에 병합한다.
-- `process` 모드는 `fork()`와 pipe IPC로 child process 결과를 parent가 수집한다.
-- `hybrid` 모드는 child process 내부에서 pthread worker를 실행한다.
-- 모든 주요 모드는 `hist_sum`, `checksum`, `valid`로 정확성 검증이 가능하다.
-- CSV에는 stage별 시간과 throughput 분석에 필요한 필드가 출력된다.
-- Docker Linux 환경과 CPU/memory 관찰 도구 사용 방법이 정리되어 있다.
-
-아직 보완해야 하는 내용:
-
-- 단일 `./sim` 실행의 `speedup`, `efficiency`는 현재 placeholder다. 최종 보고서에서는 sequential row의 `time_total`을 기준으로 후처리 계산해야 한다.
-- `scripts/run_final.sh`는 최종 실험 row를 모으는 스크립트다. 평균, 최소, 표준편차 summary CSV는 아직 자동 생성하지 않는다.
-- 10,000 trials 결과는 기능 검증용이다. 실행 시간이 너무 짧아 scheduling noise가 크므로 성능 결론 근거로 쓰기 어렵다.
-- 최종 성능 표는 최소 100,000 trials 이상, 가능하면 1,000,000 trials 이상에서 여러 번 반복 측정해야 한다.
-- shared memory IPC, semaphore 비교, perf 기반 자동 분석은 TODO로 남아 있다.
-
-보고서에서 방어 가능한 결론은 다음 방향이어야 한다.
-
-- `thread + reduce`는 hot loop에서 shared write를 제거하므로 가장 실용적인 baseline이다.
-- `mutex`는 정확하지만 lock contention을 보여주는 비교군이다.
-- `nosync`는 빠를 수 있어도 invalid 결과가 나올 수 있는 race condition 실험이다.
-- `process`는 격리성이 있지만 `fork`, pipe, `waitpid` overhead가 있다.
-- `hybrid`는 process와 thread의 역할 분리를 설명하기 좋지만 작은 workload에서는 과설계일 수 있다.
-- `pipeline interactive`는 실시간 병합 구조를 보여주지만 queue와 condition variable overhead가 추가된다.
-
-## 4. 전체 시스템 구조
+## 🏗️ 전체 구조
 
 ```text
 CLI Config
    |
    v
-Pre-processing Stage
-   - 전체 trial 수를 TaskBatch 단위로 분할
-   - batch id, trial range, seed metadata 생성
+Pre-processing
+   - trials를 TaskBatch로 분할
+   - batch metadata 생성
    |
    v
-Task Queue
-   - bounded queue
-   - pthread_mutex_t로 queue state 보호
-   - pthread_cond_t로 not_empty / not_full wait-signal 처리
-   |
-   v
-Parallel Simulation Workers
-   - worker thread가 TaskBatch를 pop
-   - Monte Carlo trial 반복 계산
-   - PartialResult 생성
+Execution Mode
+   +--> seq
+   +--> thread
+   +--> pipeline
+   +--> process
+   +--> hybrid
    |
    v
 Merge Stage
-   - final reduce 또는 interactive merge
+   +--> final reduce
+   +--> interactive merge
    |
    v
-Post-processing Stage
-   - histogram sum 검증
+Post-processing
+   - hist_sum 검증
    - checksum 계산
-   - collision probability / risk ratio 계산
+   - valid flag 출력
    |
    v
 CSV Output
 ```
 
-## 5. Simulation Model
+---
 
-각 trial은 하나의 차량 추종 상황을 의미한다.
+## 🔬 Simulation Model
 
-1. deterministic seed 기반으로 ego/front 차량 초기 상태 생성
-2. ego/front 차량 속도, 거리, 반응시간, 감속도 설정
-3. time-step마다 위치와 속도 업데이트
-4. 상대거리, 상대속도, TTC(Time-To-Collision) 계산
-5. collision 또는 risk level 판단
+각 trial은 하나의 차량 추종 상황입니다.
+
+1. deterministic seed 기반으로 차량 초기 상태 생성
+2. ego/front 차량 속도, 거리, 반응 시간, 감속도 설정
+3. `dt=0.1s` 단위로 위치와 속도 업데이트
+4. 상대거리와 TTC(Time-To-Collision) 계산
+5. 충돌 여부 또는 risk level 판단
 6. histogram, collision count, checksum에 반영
 
-Risk level은 다음과 같다.
+Risk bucket:
 
 | Risk Level | 기준 |
 | --- | --- |
@@ -125,136 +123,84 @@ Risk level은 다음과 같다.
 | Low | `TTC < 5.0` |
 | Safe | 그 외 |
 
-trial은 서로 독립적이다. 따라서 thread/process 단위로 나누어 병렬 처리하기 적합하다. 실행 순서가 달라도 같은 trial은 같은 난수를 사용하도록 seed는 trial index 기반으로 생성한다.
+trial은 서로 독립적이므로 병렬화에 적합합니다.  
+실행 순서가 달라도 같은 trial index는 같은 seed를 사용하도록 설계했습니다.
 
 ```text
 trial_seed = base_seed ^ (trial_index * 2654435761u)
 ```
 
-## 6. 실행 모드
+---
 
-| Mode | CLI | 설명 |
+## ⚙️ 실행 모드 설명
+
+### 1. `seq`
+
+단일 thread로 모든 trial을 순차 실행합니다.  
+모든 성능 비교의 기준 baseline입니다.
+
+```sh
+./sim --mode seq --trials 10000 --steps 30 --seed 42
+```
+
+### 2. `thread`
+
+`pthread_create()`로 worker thread를 만들고 static partition으로 trial range를 나눕니다.
+
+```sh
+./sim --mode thread --threads 4 --trials 10000 --steps 30 --sync reduce --seed 42
+```
+
+| Sync mode | 의미 | 해석 |
 | --- | --- | --- |
-| Sequential | `--mode seq` | 단일 thread baseline |
-| Thread static | `--mode thread --schedule static` | pthread static partition |
-| Pipeline queue | `--mode pipeline --schedule queue` | task queue + worker pool + merge queue |
-| Process | `--mode process` | parent가 child process를 fork하고 pipe로 결과 수신 |
-| Hybrid | `--mode hybrid` | child process 내부에서 pthread worker 실행 |
+| `nosync` | lock 없이 shared result 갱신 | 빠를 수 있지만 race condition 가능 |
+| `mutex` | 매 trial마다 lock/unlock | 정확하지만 lock contention 발생 |
+| `reduce` | thread-local result 후 merge | 정확성과 성능의 균형 |
 
-## 7. Synchronization 비교
+### 3. `pipeline`
 
-| Sync Mode | 구현 방식 | 목적 |
-| --- | --- | --- |
-| `nosync` | shared `Result`를 lock 없이 직접 갱신 | race condition 관찰 |
-| `mutex` | 매 trial마다 mutex lock/unlock | 정확성 보장, lock contention 확인 |
-| `reduce` | worker-local result에 누적 후 merge | hot loop의 shared write 제거 |
+trial을 batch로 나누고, bounded task queue를 통해 worker thread가 batch를 가져갑니다.
 
-`nosync`는 의도적으로 안전하지 않은 모드다. 여러 thread가 동시에 `histogram`, `total_trials`, `collision_count`를 갱신하기 때문에 lost update가 발생할 수 있다. 이 경우 `hist_sum != trials`, `valid=0`이 나올 수 있으며, 이는 synchronization 필요성을 보여주는 실험 결과다.
-
-## 8. Final Reduce와 Interactive Merge
-
-| Merge Mode | 설명 |
-| --- | --- |
-| `--merge final` | 모든 worker가 끝난 뒤 main thread가 partial result를 한 번에 병합 |
-| `--merge interactive` | worker가 batch를 끝낼 때마다 merge queue에 `PartialResult`를 push하고 aggregator thread가 계속 병합 |
-
-interactive merge는 현실적인 producer-consumer 구조를 보여주기 위한 방식이다. 계산 중간에 결과가 계속 병합되므로 pipeline 구조 설명에 적합하다. 단, merge queue synchronization overhead가 추가되므로 항상 더 빠른 구조는 아니며, final reduce와 비교 분석해야 한다.
-
-## 9. Task Queue 설계
-
-`TaskQueue`와 `MergeQueue`는 bounded queue로 구현했다.
-
-사용한 동기화 primitive:
-
-```text
-pthread_mutex_t mutex
-pthread_cond_t not_empty
-pthread_cond_t not_full
+```sh
+./sim --mode pipeline --schedule queue --merge interactive \
+  --threads 4 --trials 10000 --steps 30 \
+  --batch-size 1000 --queue-size 1024 --seed 42
 ```
 
-설계 이유:
+| Merge mode | 의미 | 장점 | 단점 |
+| --- | --- | --- | --- |
+| `final` | worker 종료 후 마지막에 병합 | 단순하고 overhead 작음 | 결과 병합이 끝에 몰림 |
+| `interactive` | batch 결과를 aggregator가 중간 병합 | pipeline 구조 설명에 좋음 | queue/condvar overhead 증가 |
 
-- mutex는 queue의 `head`, `tail`, `count`, `closed` 상태를 보호한다.
-- condition variable은 queue가 비어 있거나 가득 찬 경우 worker/producer를 sleep 상태로 보낸다.
-- semaphore는 사용하지 않았다. queue 상태 보호와 wait/signal 조건 표현이 모두 필요하므로, 이번 구현에서는 mutex + condition variable이 더 직접적이고 설명하기 쉽다.
+### 4. `process`
 
-## 10. Process Mode
+parent가 child process를 `fork()`하고, child가 계산한 `Result`를 pipe로 전달합니다.
 
-Process mode는 `fork()`와 pipe IPC를 사용한다.
-
-```text
-[Parent Process]
-   |
-   +-- fork child 0
-   +-- fork child 1
-   +-- ...
-   |
-   +-- read Result from pipe
-   +-- waitpid()
-   +-- result_merge()
-
-[Child Process]
-   |
-   +-- assigned trial range 계산
-   +-- Result를 pipe에 write
-   +-- _exit(0)
+```sh
+./sim --mode process --processes 2 --trials 10000 --steps 30 --ipc pipe --seed 42
 ```
 
-현재 IPC는 `Result` 구조체를 pipe로 전달한다. 동일한 binary 내부에서 parent/child가 같은 구조체 layout을 사용하므로 프로젝트 실험용으로 충분하다. shared memory IPC는 TODO로 남겨두었다.
-
-## 11. Hybrid Mode
-
-Hybrid mode는 process와 thread의 역할을 분리한다.
-
-| 구성 요소 | 역할 |
-| --- | --- |
-| Parent process | child process 생성, pipe 결과 수신, 최종 merge |
-| Child process | 큰 simulation group 담당 |
-| Thread worker | child process 내부 trial range 병렬 계산 |
-| Pipe IPC | child result를 parent에 전달 |
-
-즉, process는 큰 작업 단위 분리와 IPC 병합을 보여주고, thread는 process 내부의 세부 계산 병렬화를 담당한다.
-
-## 12. CLI 옵션
-
 ```text
---mode <seq|thread|pipeline|process|hybrid>
---schedule <static|queue>
---merge <final|interactive>
---trials <int>
---steps <int>
---threads <int>
---processes <int>
---batch-size <int>
---queue-size <int>
---sync <nosync|mutex|reduce>
---ipc <pipe|shm>
---enable-pipeline <0|1>
---metrics-detail <0|1>
---seed <int>
---verbose
---help
+Parent
+  -> fork child
+  -> pipe read
+  -> waitpid
+  -> final merge
 ```
 
-기본값:
+### 5. `hybrid`
 
-```text
-mode=thread
-schedule=static
-merge=final
-trials=100000
-steps=50
-threads=4
-processes=2
-batch_size=1000
-queue_size=1024
-sync=reduce
-ipc=pipe
-seed=42
-metrics_detail=1
+process와 thread를 함께 사용합니다.  
+child process 내부에서 pthread worker가 trial range를 병렬 계산합니다.
+
+```sh
+./sim --mode hybrid --processes 2 --threads 2 \
+  --trials 10000 --steps 30 --ipc pipe --seed 42
 ```
 
-## 13. 빌드 방법
+---
+
+## 🧪 빌드 및 빠른 검증
 
 ```sh
 make clean
@@ -262,56 +208,110 @@ make
 make test
 ```
 
-컴파일 옵션:
+`make test`는 다음을 확인합니다.
+
+| 확인 항목 | 기대 결과 |
+| --- | --- |
+| build 성공 | `gcc -std=c11 -O2 -Wall -Wextra -pthread` |
+| sequential 실행 | `valid=1` |
+| thread reduce 실행 | `valid=1` |
+| pipeline interactive 실행 | `valid=1` |
+| checksum | 같은 seed/조건에서 동일 |
+
+정확성 기준:
 
 ```text
-gcc -std=c11 -O2 -Wall -Wextra -pthread -Iinclude
+total_trials == trials
+hist_sum == trials
+valid == 1
+checksum 동일
 ```
 
-## 14. 실행 예시
+---
 
-Sequential baseline:
+## 📊 실험 결과 요약
 
-```sh
-./sim --mode seq --trials 10000 --steps 30 --seed 42
+아래 표는 업로드된 `results/res/*/final_results.csv` 기준입니다.  
+조건은 주로 `trials=10000`, `steps=30`, `seed=42`이며, 실행 시간이 매우 짧기 때문에 **기능 검증용 결과**로 보는 것이 현실적입니다.
+
+### ✅ 정확성 검증
+
+| 항목 | 결과 |
+| --- | --- |
+| CSV row 수 | 30개 |
+| `valid=1` 비율 | 100% |
+| `hist_sum` | 모두 `10000` |
+| checksum | 모두 `9158329899332878926` |
+| 해석 | 모든 구현 모드가 같은 simulation 결과를 재현 |
+
+### ⏱️ 평균 실행시간 요약
+
+| Mode | 조건 | 평균 `time_total` | 해석 |
+| --- | --- | ---: | --- |
+| `seq` | baseline | `0.001524s` | 기준 실행 |
+| `thread` | 1 thread | `0.001475s` | seq와 거의 유사 |
+| `thread` | 2 threads | `0.001092s` | 병렬화 효과 관찰 |
+| `thread` | 4 threads | `0.000749s` | 해당 결과에서 가장 빠른 thread 조건 |
+| `thread` | 8 threads | `0.000882s` | 4 threads보다 느려짐, scheduling overhead 가능 |
+| `pipeline final` | batch 1000 | `0.000954s` | queue 구조 중 안정적 |
+| `pipeline interactive` | batch 1000 | `0.001112s` | aggregator/merge queue overhead 존재 |
+| `pipeline interactive` | batch 100 | `0.002188s` | batch가 너무 작아 queue 접근 비용 증가 |
+| `pipeline interactive` | batch 10000 | `0.001852s` | batch가 너무 커 load balancing 약화 가능 |
+| `process` | 2 processes | `0.001211s` | fork/IPC overhead 존재 |
+| `process` | 4 processes | `0.001003s` | 2 processes보다 개선되지만 thread 4보다 느림 |
+| `hybrid` | 2 processes x 2 threads | `0.001128s` | 구조는 정상, overhead 존재 |
+| `hybrid` | 2 processes x 4 threads | `0.001264s` | 작은 workload에서는 과설계 가능 |
+
+### 🧠 결과 해석
+
+현재 결과에서 바로 말할 수 있는 점:
+
+- ✅ 모든 모드가 `valid=1`과 동일 checksum을 보여 정확성은 확인되었습니다.
+- ✅ `thread + reduce + 4 threads`가 10,000 trials 조건에서는 가장 실용적으로 보입니다.
+- ⚠️ `8 threads`가 `4 threads`보다 느려지는 현상이 있어 thread 수 증가가 항상 성능 향상으로 이어지지는 않습니다.
+- ⚠️ `interactive merge`는 구조적으로 의미 있지만, 작은 workload에서는 queue와 aggregator overhead 때문에 `final merge`보다 느릴 수 있습니다.
+- ⚠️ `process`와 `hybrid`는 OS 개념 설명에는 좋지만, 작은 workload에서는 `fork`, pipe, `waitpid`, thread 생성 비용이 커질 수 있습니다.
+
+중요한 제한:
+
+> 10,000 trials 결과는 시간이 1ms 안팎이라 OS scheduler noise의 영향을 크게 받습니다.  
+> 최종 보고서의 성능 결론은 `100000` 또는 `1000000` trials 이상에서 반복 측정한 결과로 작성해야 합니다.
+
+---
+
+## 📈 성능 지표와 계산식
+
+CSV 주요 필드:
+
+| 필드 | 의미 |
+| --- | --- |
+| `time_total` | 전체 실행 시간 |
+| `time_pre` | batch 생성 등 전처리 |
+| `time_compute` | worker 계산 구간 |
+| `time_sync` | queue wait, lock 등 synchronization 비용 |
+| `time_merge` | partial result 병합 시간 |
+| `time_post` | validation/checksum 등 후처리 |
+| `throughput_batches_per_sec` | 초당 처리 batch 수 |
+| `hist_sum` | histogram 합계 |
+| `checksum` | 결과 재현성 확인 |
+| `valid` | 결과 정합성 flag |
+
+현재 단일 실행 CSV의 `speedup`, `efficiency`는 placeholder입니다.  
+보고서에서는 다음 식으로 후처리 계산합니다.
+
+```text
+speedup = T_seq / T_parallel
+efficiency = speedup / worker_count
+sequential_fraction_estimate = (T_pre + T_sync + T_merge + T_post) / T_total
 ```
 
-Thread static reduce:
+---
 
-```sh
-./sim --mode thread --threads 4 --trials 10000 --steps 30 --sync reduce --seed 42
-```
-
-Race condition 확인:
-
-```sh
-./sim --mode thread --threads 4 --trials 10000 --steps 30 --sync nosync --seed 42
-```
-
-Pipeline + interactive merge:
-
-```sh
-./sim --mode pipeline --schedule queue --merge interactive --threads 4 \
-  --trials 10000 --steps 30 --batch-size 1000 --queue-size 1024 --seed 42
-```
-
-Process mode:
-
-```sh
-./sim --mode process --processes 2 --trials 10000 --steps 30 --ipc pipe --seed 42
-```
-
-Hybrid mode:
-
-```sh
-./sim --mode hybrid --processes 2 --threads 2 --trials 10000 --steps 30 --ipc pipe --seed 42
-```
-
-## 15. 최종 실험 자동화
+## 🚀 최종 실험 자동화
 
 ```sh
 chmod +x scripts/run_final.sh
-TRIALS=10000 STEPS=30 scripts/run_final.sh
+TRIALS=100000 STEPS=50 scripts/run_final.sh
 ```
 
 결과 파일:
@@ -320,84 +320,40 @@ TRIALS=10000 STEPS=30 scripts/run_final.sh
 results/csv/final_results.csv
 ```
 
-최종 발표/보고서용 측정은 Docker Linux에서 더 큰 workload로 수행한다.
+`scripts/run_final.sh`가 수집하는 항목:
+
+| 실험 | 목적 |
+| --- | --- |
+| Sequential | baseline |
+| Thread 1/2/4/8 | thread scaling |
+| Pipeline final vs interactive | merge 전략 비교 |
+| Batch size 100/1000/10000 | queue granularity 분석 |
+| Process 2/4 | child process overhead |
+| Hybrid 2x2 / 2x4 | process + thread 조합 |
+
+권장 최종 측정:
 
 ```sh
 TRIALS=1000000 STEPS=50 scripts/run_final.sh
 ```
 
-실험 항목:
-
-| 실험 | 목적 |
-| --- | --- |
-| Sequential | 기준 성능 |
-| Thread 1/2/4/8 | thread scaling |
-| Pipeline final vs interactive | merge 방식 비교 |
-| Batch size 100/1000/10000 | queue granularity 분석 |
-| Process 2/4 | child process 성능 |
-| Hybrid 2x2 / 2x4 | process + thread 조합 |
-
-## 16. CSV 출력 필드
-
-`final_results.csv`는 다음 필드를 출력한다.
+반복 측정은 아직 자동 summary가 없으므로 다음 방식으로 보강합니다.
 
 ```text
-mode,schedule,merge,sync,processes,threads,trials,steps,batch_size,queue_size,
-time_total,time_pre,time_compute,time_sync,time_merge,time_post,
-speedup,efficiency,sequential_fraction_estimate,compute_ratio,
-sync_overhead_ratio,merge_overhead_ratio,throughput_batches_per_sec,
-total_trials,collision_count,hist_sum,checksum,valid,notes
+1. 같은 조건을 5회 이상 실행
+2. time_total 평균 / 최소 / 표준편차 계산
+3. sequential baseline 기준 speedup 계산
+4. worker_count 기준 efficiency 계산
 ```
 
-주요 필드 의미:
+---
 
-| 필드 | 의미 |
-| --- | --- |
-| `time_total` | 전체 실행 시간 |
-| `time_pre` | batch 생성 등 전처리 시간 |
-| `time_compute` | worker 계산 구간 시간 |
-| `time_sync` | queue wait/lock 등 synchronization 비용 |
-| `time_merge` | partial result 병합 시간 |
-| `time_post` | validation/checksum 등 후처리 시간 |
-| `sequential_fraction_estimate` | Amdahl’s Law 분석용 순차 구간 추정 |
-| `compute_ratio` | 전체 시간 중 계산 구간 비율 |
-| `sync_overhead_ratio` | 전체 시간 중 동기화 비용 비율 |
-| `merge_overhead_ratio` | 전체 시간 중 병합 비용 비율 |
-| `throughput_batches_per_sec` | 초당 처리 batch 수 |
-| `hist_sum` | histogram 합계 |
-| `checksum` | 결과 재현성 확인용 checksum |
-| `valid` | `hist_sum == trials` 여부 |
+## 🐳 Docker Linux 실행
 
-현재 프로그램 단일 실행에서는 `speedup`, `efficiency`를 placeholder로 둔다. 보고서에서는 sequential row를 기준으로 후처리 계산한다.
-
-```text
-speedup = T_seq / T_parallel
-efficiency = speedup / worker_count
-```
-
-Amdahl’s Law 분석용 지표:
-
-```text
-sequential_fraction_estimate = (T_pre + T_sync + T_merge + T_post) / T_total
-compute_ratio = T_compute / T_total
-sync_overhead_ratio = T_sync / T_total
-merge_overhead_ratio = T_merge / T_total
-throughput = processed_batches / T_total
-```
-
-## 17. Docker Linux 실행 방법
-
-최종 측정 기준은 Docker Ubuntu Linux다. macOS에서 개발할 수는 있지만, 발표용 수치는 Linux 컨테이너에서 다시 측정하는 것을 권장한다.
-
-Docker image build:
+macOS에서도 컴파일은 가능하지만, 발표/보고서용 성능 수치는 Linux 기준이 더 적합합니다.
 
 ```sh
 docker build -t os-montecarlo-risk .
-```
-
-컨테이너 실행:
-
-```sh
 docker run --rm -it os-montecarlo-risk
 ```
 
@@ -406,113 +362,92 @@ docker run --rm -it os-montecarlo-risk
 ```sh
 make clean
 make
-TRIALS=10000 STEPS=30 scripts/run_final.sh
+TRIALS=100000 STEPS=50 scripts/run_final.sh
 ```
 
-docker compose:
-
-```sh
-docker compose build
-docker compose run --rm os-sim
-make
-TRIALS=10000 STEPS=30 scripts/run_final.sh
-```
-
-Docker image에는 다음 도구가 포함된다.
-
-| 도구 | 용도 |
-| --- | --- |
-| `gcc`, `make` | C build |
-| `procps` | `top`, `ps` |
-| `sysstat` | `pidstat` |
-| `/usr/bin/time` | memory / user time / system time 측정 |
-| `htop` | optional monitoring |
-
-## 18. CPU Utilization 캡처
-
-긴 workload를 실행한 상태에서 별도 터미널로 CPU 사용률을 캡처한다.
-
-터미널 1:
-
-```sh
-./sim --mode pipeline --schedule queue --merge interactive --threads 4 \
-  --trials 10000000 --steps 100 --batch-size 1000 --queue-size 1024 --seed 42
-```
-
-터미널 2:
+CPU/memory 캡처:
 
 ```sh
 pidstat -u -r -C sim 1
-```
-
-또는:
-
-```sh
-top
-```
-
-memory usage까지 확인:
-
-```sh
 /usr/bin/time -v ./sim --mode hybrid --processes 2 --threads 4 \
   --trials 1000000 --steps 100 --ipc pipe --seed 42
 ```
 
-## 19. 결과 해석 방향
+---
 
-| 관찰 결과 | 해석 |
+## 📁 프로젝트 구조
+
+```text
+.
+├── include/                 # public headers
+├── src/                     # C source files
+│   ├── main.c               # CLI dispatch, CSV output
+│   ├── simulation.c         # Monte Carlo trial kernel
+│   ├── sequential.c         # sequential baseline
+│   ├── thread_mode.c        # pthread static mode
+│   ├── pipeline_mode.c      # queue 기반 pipeline
+│   ├── process_mode.c       # fork + pipe IPC
+│   ├── hybrid_mode.c        # process 내부 pthread
+│   ├── task_queue.c         # bounded task queue
+│   ├── merge_queue.c        # partial result queue
+│   ├── preprocess.c         # TaskBatch 생성
+│   ├── postprocess.c        # validation/checksum
+│   └── metrics.c            # stage timing
+├── scripts/
+│   ├── run_midterm.sh
+│   └── run_final.sh
+├── docs/
+│   ├── final_presentation_changes.md
+│   ├── final_plan.md
+│   └── experiment_plan.md
+├── results/
+│   ├── csv/
+│   └── res/
+├── Makefile
+├── Dockerfile
+└── docker-compose.yml
+```
+
+---
+
+## 🧭 최종 보고서에서 가져갈 결론
+
+| 구조 | 결론 |
 | --- | --- |
-| thread 수가 증가할수록 time 감소 | CPU-bound trial 병렬화 효과 |
-| 8 threads에서 효율이 낮아짐 | physical core 수, scheduling overhead, context switching 영향 |
-| `nosync`에서 `valid=0` | shared result update race condition |
-| `mutex`가 정확하지만 느림 | per-trial lock contention |
-| `reduce`가 정확하고 빠름 | hot loop에서 shared write 제거 |
-| batch size가 너무 작으면 느림 | queue synchronization overhead 증가 |
-| batch size가 너무 크면 load balancing 저하 | worker idle 가능성 증가 |
-| process가 thread보다 느릴 수 있음 | fork/IPC/waitpid overhead |
-| hybrid 성능이 workload에 따라 달라짐 | process overhead와 thread 병렬성의 trade-off |
+| `thread + reduce` | hot loop에서 shared write를 제거하는 가장 실용적인 baseline |
+| `mutex` | 정확하지만 lock contention을 보여주는 비교군 |
+| `nosync` | race condition 설명에 적합 |
+| `pipeline final` | queue 구조에서 비교적 단순하고 안정적인 병합 |
+| `pipeline interactive` | 실시간 병합 가능, 하지만 queue/aggregator overhead 존재 |
+| `process` | 격리성은 좋지만 `fork`와 IPC 비용이 있음 |
+| `hybrid` | process/thread 역할 분리를 설명하기 좋지만 작은 workload에서는 과설계 가능 |
 
-## 20. Trouble Shooting
+프로젝트의 최종 가치는 단순히 가장 빠른 모드를 찾는 것이 아닙니다.  
+같은 CPU-bound 작업을 여러 OS 실행 구조로 바꾸어 보면서 **정확성, overhead, scalability의 trade-off를 설명할 수 있다는 점**이 핵심입니다.
+
+---
+
+## 🛠️ TODO
+
+| 우선순위 | 작업 | 이유 |
+| --- | --- | --- |
+| 1 | Docker Linux에서 큰 workload 반복 측정 | 발표용 수치 신뢰도 확보 |
+| 2 | speedup/efficiency 후처리 | sequential baseline 기준 비교 |
+| 3 | 5회 이상 반복 측정 summary | 평균/최소/표준편차 필요 |
+| 4 | CPU/memory 캡처 | `pidstat`, `/usr/bin/time -v` 근거 확보 |
+| 5 | 그래프 생성 | 보고서 가독성 향상 |
+| 6 | shared memory IPC | pipe IPC와 비교 가능 |
+
+---
+
+## 🧯 Troubleshooting
 
 | 문제 | 해결 |
 | --- | --- |
 | `Permission denied` | `chmod +x scripts/run_final.sh` |
 | `make: command not found` | `apt-get install -y build-essential make` |
-| Docker 결과 파일 권한 문제 | project image 사용 또는 host directory 권한 조정 |
-| `nosync` 결과가 invalid | 정상 동작이다. race condition 관찰용 모드 |
-| `--ipc shm` 실행 실패 | shared memory는 TODO 확장 항목 |
-| 8 threads가 더 느림 | core 수 한계, scheduling overhead, context switching 분석 필요 |
+| `nosync`가 invalid | 정상이다. race condition 관찰용 모드 |
+| `--ipc shm` 실패 | shared memory IPC는 TODO |
+| 8 threads가 더 느림 | core 수 한계, scheduling/context switching overhead 확인 |
+| macOS와 Docker 결과 차이 | 최종 수치는 Docker Linux 기준으로 통일 |
 
-## 21. 현재 구현 완료 범위
-
-| 항목 | 상태 |
-| --- | --- |
-| Sequential baseline | 완료 |
-| Pthread static thread mode | 완료 |
-| nosync / mutex / reduce | 완료 |
-| Stage별 시간 측정 | 완료 |
-| Pre-processing / Post-processing | 완료 |
-| TaskBatch | 완료 |
-| mutex + condition variable task queue | 완료 |
-| queue 기반 pipeline | 완료 |
-| final reduce | 완료 |
-| interactive merge | 완료 |
-| process mode | 완료 |
-| pipe IPC | 완료 |
-| hybrid mode | 기본 구현 완료 |
-| run_final.sh | 완료 |
-| Docker Linux 환경 | 완료 |
-| capture checklist | 완료 |
-
-## 22. TODO 및 제한사항
-
-| 항목 | 상태 |
-| --- | --- |
-| shared memory IPC | TODO |
-| semaphore vs mutex 비교 | TODO |
-| double buffering | TODO |
-| perf stat 자동화 | TODO |
-| work stealing | TODO |
-| 그래프 자동 생성 | TODO |
-
-현재 구현은 최종보고서에서 설명 가능한 수준의 process/thread/synchronization/pipeline/IPC 구조를 우선 완성하는 데 초점을 맞췄다.
