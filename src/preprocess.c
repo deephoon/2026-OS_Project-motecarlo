@@ -13,7 +13,7 @@ void preprocess_run_extra_work(const Config *cfg, int batch_count)
         return;
     }
 
-    iterations = (long)cfg->pre_work * (long)batch_count;
+    iterations = (long)cfg->pre_work;
     acc = (unsigned long)cfg->seed ^ (unsigned long)batch_count;
     for (long i = 0; i < iterations; ++i) {
         acc ^= (unsigned long)i + 0x9e3779b9ul;

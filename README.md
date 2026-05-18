@@ -422,7 +422,7 @@ raw `./sim` 출력의 `speedup`, `efficiency`는 단일 실행만으로 baseline
 trials = 100000 이상
 가능하면 trials = 1000000 이상
 반복 횟수 = 5회 이상
-환경 = Docker Ubuntu Linux
+환경 = Docker Ubuntu Linux, WSL2 Ubuntu, 또는 일반 Linux
 ```
 
 ---
@@ -473,11 +473,15 @@ valid_all
 
 CPU/memory usage는 `pidstat`, `/usr/bin/time -v`로 별도 캡처합니다.
 
+Linux/Windows WSL/Docker 재현 절차와 100,000·1,000,000 trials 반복 측정 결과는 [`docs/reproducible_linux_experiment_guide.md`](docs/reproducible_linux_experiment_guide.md)에 정리했습니다.
+
 ---
 
 ## 🐳 Docker Linux 실행
 
 macOS에서도 컴파일은 가능하지만, 발표/보고서용 성능 수치는 Linux 기준이 더 적합합니다.
+다만 Docker Desktop은 macOS/Windows 위의 Linux VM에서 실행되므로 **순수 물리 Linux 결과와 완전히 같다고 주장하면 안 됩니다.**  
+보고서에서는 “Docker Ubuntu Linux container에서 반복 측정했다”고 쓰고, 가능하면 팀원 중 Windows 사용자는 WSL2 Ubuntu에서 한 번 더 돌려 교차 확인하는 것이 좋습니다.
 
 ```sh
 docker build -t os-montecarlo-risk .
@@ -498,6 +502,97 @@ CPU/memory 캡처:
 pidstat -u -r -C sim 1
 /usr/bin/time -v ./sim --mode hybrid --processes 2 --threads 4 \
   --trials 1000000 --steps 100 --ipc pipe --seed 42
+```
+
+---
+
+## 🪟 Windows에서 Linux 환경으로 실행
+
+이 프로젝트는 `pthread`, `fork`, `pipe`, `waitpid` 같은 POSIX/Linux API를 사용합니다.  
+따라서 Windows native MinGW 환경보다는 **WSL2 Ubuntu** 또는 **Docker Desktop**을 권장합니다.
+
+### WSL2 Ubuntu 권장
+
+PowerShell 관리자 권한:
+
+```powershell
+wsl --install -d Ubuntu-22.04
+```
+
+Ubuntu 터미널:
+
+```sh
+sudo apt update
+sudo apt install -y build-essential make python3 time sysstat
+
+git clone https://github.com/deephoon/2026-OS_Project-motecarlo.git
+cd 2026-OS_Project-motecarlo
+
+make clean
+make
+make test
+
+TRIALS=1000000 STEPS=50 REPEATS=5 \
+PRE_WORK=50000 POST_WORK=10000 scripts/run_final.sh
+```
+
+결과 파일:
+
+```text
+results/csv/final_raw.csv
+results/csv/final_analyzed.csv
+results/csv/final_summary.md
+```
+
+### Windows Docker Desktop
+
+PowerShell:
+
+```powershell
+git clone https://github.com/deephoon/2026-OS_Project-motecarlo.git
+cd 2026-OS_Project-motecarlo
+
+docker build -t os-montecarlo-risk .
+
+docker run --rm `
+  -v "${PWD}/results/csv/docker_1m:/workspace/results/csv" `
+  os-montecarlo-risk `
+  sh -lc "TRIALS=1000000 STEPS=50 REPEATS=5 PRE_WORK=50000 POST_WORK=10000 OUT_DIR=results/csv scripts/run_final.sh"
+```
+
+---
+
+## 🐧 일반 Linux 실행
+
+Ubuntu/Debian 기준:
+
+```sh
+sudo apt update
+sudo apt install -y build-essential make python3 time sysstat
+
+git clone https://github.com/deephoon/2026-OS_Project-motecarlo.git
+cd 2026-OS_Project-motecarlo
+
+make clean
+make
+make test
+
+TRIALS=1000000 STEPS=50 REPEATS=5 \
+PRE_WORK=50000 POST_WORK=10000 scripts/run_final.sh
+```
+
+CPU/memory 측정:
+
+```sh
+/usr/bin/time -v ./sim --mode thread --threads 8 \
+  --trials 1000000 --steps 50 --sync reduce \
+  --pre-work 50000 --post-work 10000 --metrics-detail 1
+```
+
+실행 중 CPU/RSS 관찰:
+
+```sh
+pidstat -u -r -C sim 1
 ```
 
 ---

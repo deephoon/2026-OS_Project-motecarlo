@@ -1,6 +1,7 @@
 sim
 *.o
-results/raw/*
-results/csv/*
+node_modules
+results
+ref
 .git
 .DS_Store
