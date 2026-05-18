@@ -1,6 +1,7 @@
 #ifndef POSTPROCESS_H
 #define POSTPROCESS_H
 
+#include "config.h"
 #include "result.h"
 
 typedef struct {
@@ -11,5 +12,6 @@ typedef struct {
 } PostSummary;
 
 int postprocess_finalize(Result *result, long expected_trials, PostSummary *summary);
+void postprocess_run_extra_work(const Config *cfg, const Result *result);
 
 #endif

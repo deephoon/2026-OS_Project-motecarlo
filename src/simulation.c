@@ -140,7 +140,7 @@ void run_batch(const Config *cfg, const TaskBatch *batch, Result *out)
     for (long i = batch->start_idx; i < batch->end_idx; ++i) {
         unsigned int trial_seed = simulation_seed_for_trial(cfg->seed, i);
         int collided = 0;
-        RiskLevel risk = run_trial(&trial_seed, batch->time_steps, &collided);
+        RiskLevel risk = run_trial(&trial_seed, cfg->time_steps, &collided);
         result_add_trial(out, risk, collided);
     }
     out->checksum = result_compute_checksum(out);

@@ -44,19 +44,40 @@ double metrics_total(const StageMetrics *m)
 double metrics_compute_ratio(const StageMetrics *m)
 {
     double total = metrics_total(m);
-    return total > 0.0 ? m->t_compute / total : 0.0;
+    double value;
+    if (total <= 0.0) {
+        return 0.0;
+    }
+    value = m->t_compute;
+    if (value < 0.0) value = 0.0;
+    if (value > total) value = total;
+    return value / total;
 }
 
 double metrics_sync_ratio(const StageMetrics *m)
 {
     double total = metrics_total(m);
-    return total > 0.0 ? m->t_sync / total : 0.0;
+    double value;
+    if (total <= 0.0) {
+        return 0.0;
+    }
+    value = m->t_sync;
+    if (value < 0.0) value = 0.0;
+    if (value > total) value = total;
+    return value / total;
 }
 
 double metrics_merge_ratio(const StageMetrics *m)
 {
     double total = metrics_total(m);
-    return total > 0.0 ? m->t_merge / total : 0.0;
+    double value;
+    if (total <= 0.0) {
+        return 0.0;
+    }
+    value = m->t_merge;
+    if (value < 0.0) value = 0.0;
+    if (value > total) value = total;
+    return value / total;
 }
 
 double metrics_throughput_batches(const StageMetrics *m)
@@ -71,7 +92,12 @@ double metrics_sequential_fraction_estimate(const StageMetrics *m)
     if (total <= 0.0) {
         return 0.0;
     }
-    return (m->t_pre + m->t_sync + m->t_merge + m->t_post) / total;
+    {
+        double value = m->t_pre + m->t_sync + m->t_merge + m->t_post;
+        if (value < 0.0) value = 0.0;
+        if (value > total) value = total;
+        return value / total;
+    }
 }
 
 int metrics_get_cpu_usage(CpuUsage *usage)

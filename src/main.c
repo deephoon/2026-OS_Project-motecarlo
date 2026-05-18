@@ -14,7 +14,7 @@
 static void print_final_header(void)
 {
     puts("mode,schedule,merge,sync,processes,threads,trials,steps,batch_size,"
-         "queue_size,time_total,time_pre,time_compute,time_sync,time_merge,"
+         "queue_size,pre_work,post_work,time_total,time_pre,time_compute,time_sync,time_merge,"
          "time_post,speedup,efficiency,sequential_fraction_estimate,"
          "compute_ratio,sync_overhead_ratio,merge_overhead_ratio,"
          "throughput_batches_per_sec,total_trials,collision_count,hist_sum,"
@@ -32,7 +32,7 @@ static void print_final_row(const Config *cfg, const StageMetrics *m,
                   cfg->threads;
     (void)speedup;
     (void)efficiency;
-    printf("%s,%s,%s,%s,%d,%d,%ld,%d,%d,%d,%.6f,%.6f,%.6f,%.6f,%.6f,"
+    printf("%s,%s,%s,%s,%d,%d,%ld,%d,%d,%d,%d,%d,%.6f,%.6f,%.6f,%.6f,%.6f,"
            "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%ld,%ld,%ld,%lu,%d,%s\n",
            run_mode_to_string(cfg->mode),
            schedule_mode_to_string(cfg->schedule_mode),
@@ -44,6 +44,8 @@ static void print_final_row(const Config *cfg, const StageMetrics *m,
            cfg->time_steps,
            cfg->batch_size,
            cfg->queue_size,
+           cfg->pre_work,
+           cfg->post_work,
            total,
            m->t_pre,
            m->t_compute,

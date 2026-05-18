@@ -2,6 +2,7 @@
 
 #include "metrics.h"
 #include "postprocess.h"
+#include "preprocess.h"
 #include "simulation.h"
 
 #include <pthread.h>
@@ -93,6 +94,11 @@ int run_thread_mode_metrics(const Config *cfg, Result *out, StageMetrics *metric
     result_init(out);
 
     start = now_sec();
+    preprocess_run_extra_work(cfg, (int)((cfg->trials + cfg->batch_size - 1) / cfg->batch_size));
+    end = now_sec();
+    metrics->t_pre = elapsed_sec(start, end);
+
+    start = now_sec();
     for (int i = 0; i < cfg->threads; ++i) {
         args[i].thread_id = i;
         args[i].cfg = cfg;
@@ -126,6 +132,7 @@ int run_thread_mode_metrics(const Config *cfg, Result *out, StageMetrics *metric
 
     start = now_sec();
     postprocess_finalize(out, cfg->trials, &summary);
+    postprocess_run_extra_work(cfg, out);
     end = now_sec();
     metrics->t_post = elapsed_sec(start, end);
     metrics->t_total_end = now_sec();

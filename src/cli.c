@@ -16,6 +16,7 @@ void cli_print_usage(FILE *out, const char *program)
             "  --merge <final|interactive>\n"
             "  --trials <int> --steps <int> --threads <int>\n"
             "  --processes <int> --batch-size <int> --queue-size <int>\n"
+            "  --pre-work <int> --post-work <int>\n"
             "  --sync <nosync|mutex|reduce> --ipc <pipe|shm>\n"
             "  --enable-pipeline <0|1> --metrics-detail <0|1>\n"
             "  --seed <int> --verbose --help\n",
@@ -86,6 +87,10 @@ int cli_parse_args(int argc, char **argv, Config *cfg)
             if (parse_int_option(argc, argv, &i, 1, INT_MAX, &cfg->batch_size) != 0) return -1;
         } else if (strcmp(arg, "--queue-size") == 0) {
             if (parse_int_option(argc, argv, &i, 1, INT_MAX, &cfg->queue_size) != 0) return -1;
+        } else if (strcmp(arg, "--pre-work") == 0) {
+            if (parse_int_option(argc, argv, &i, 0, INT_MAX, &cfg->pre_work) != 0) return -1;
+        } else if (strcmp(arg, "--post-work") == 0) {
+            if (parse_int_option(argc, argv, &i, 0, INT_MAX, &cfg->post_work) != 0) return -1;
         } else if (strcmp(arg, "--enable-pipeline") == 0) {
             if (parse_int_option(argc, argv, &i, 0, 1, &cfg->enable_pipeline) != 0) return -1;
         } else if (strcmp(arg, "--metrics-detail") == 0) {

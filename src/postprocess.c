@@ -1,5 +1,26 @@
 #include "postprocess.h"
 
+static volatile unsigned long postprocess_sink;
+
+void postprocess_run_extra_work(const Config *cfg, const Result *result)
+{
+    unsigned long acc;
+    long iterations;
+
+    if (cfg == 0 || result == 0 || cfg->post_work <= 0) {
+        return;
+    }
+
+    iterations = (long)cfg->post_work * (long)(RISK_BUCKETS + 2);
+    acc = result->checksum ^ (unsigned long)result->total_trials;
+    for (long i = 0; i < iterations; ++i) {
+        acc += (unsigned long)result->histogram[i % RISK_BUCKETS] + (unsigned long)i;
+        acc ^= acc << 7;
+        acc ^= acc >> 11;
+    }
+    postprocess_sink = acc;
+}
+
 int postprocess_finalize(Result *result, long expected_trials, PostSummary *summary)
 {
     long hist_sum;

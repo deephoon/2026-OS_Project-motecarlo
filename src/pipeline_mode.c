@@ -271,16 +271,11 @@ int run_pipeline_mode(const Config *cfg, Result *out, StageMetrics *metrics)
 
     start = now_sec();
     postprocess_finalize(out, cfg->trials, &summary);
+    postprocess_run_extra_work(cfg, out);
     end = now_sec();
     metrics->t_post = elapsed_sec(start, end);
     metrics->processed_batches = batch_count;
     metrics->t_total_end = now_sec();
-    metrics->t_compute = metrics_total(metrics) - metrics->t_pre -
-                         metrics->t_sync - metrics->t_merge -
-                         metrics->t_post;
-    if (metrics->t_compute < 0.0) {
-        metrics->t_compute = 0.0;
-    }
 
 cleanup:
     if (task_queue_ready) task_queue_destroy(&task_queue);

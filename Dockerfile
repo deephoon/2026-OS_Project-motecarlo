@@ -4,6 +4,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
         make \
+        python3 \
         time \
         procps \
         sysstat \

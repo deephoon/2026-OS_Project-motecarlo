@@ -16,6 +16,8 @@ void config_set_defaults(Config *cfg)
     cfg->processes = 2;
     cfg->batch_size = 1000;
     cfg->queue_size = 1024;
+    cfg->pre_work = 0;
+    cfg->post_work = 0;
     cfg->enable_pipeline = 1;
     cfg->metrics_detail = 1;
     cfg->seed = 42u;
@@ -43,7 +45,8 @@ int config_validate(const Config *cfg)
         return 0;
     }
     if (cfg->trials <= 0 || cfg->time_steps <= 0 || cfg->threads <= 0 ||
-        cfg->processes <= 0 || cfg->batch_size <= 0 || cfg->queue_size <= 0) {
+        cfg->processes <= 0 || cfg->batch_size <= 0 || cfg->queue_size <= 0 ||
+        cfg->pre_work < 0 || cfg->post_work < 0) {
         return 0;
     }
     return 1;

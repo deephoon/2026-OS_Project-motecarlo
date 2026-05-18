@@ -42,6 +42,8 @@ typedef struct {
     int processes;
     int batch_size;
     int queue_size;
+    int pre_work;
+    int post_work;
     int enable_pipeline;
     int metrics_detail;
     unsigned int seed;

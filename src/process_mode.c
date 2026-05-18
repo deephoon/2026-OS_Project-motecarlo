@@ -2,6 +2,7 @@
 
 #include "ipc.h"
 #include "postprocess.h"
+#include "preprocess.h"
 #include "simulation.h"
 
 #include <stdio.h>
@@ -49,6 +50,7 @@ int run_process_mode(const Config *cfg, Result *out, StageMetrics *metrics)
     }
 
     start = now_sec();
+    preprocess_run_extra_work(cfg, (int)((cfg->trials + cfg->batch_size - 1) / cfg->batch_size));
     end = now_sec();
     metrics->t_pre = elapsed_sec(start, end);
 
@@ -118,6 +120,7 @@ int run_process_mode(const Config *cfg, Result *out, StageMetrics *metrics)
 
     start = now_sec();
     postprocess_finalize(out, cfg->trials, &summary);
+    postprocess_run_extra_work(cfg, out);
     end = now_sec();
     metrics->t_post = elapsed_sec(start, end);
     metrics->processed_batches = cfg->processes;
