@@ -365,10 +365,14 @@ raw `./sim` 출력의 `speedup`, `efficiency`는 단일 실행만으로 baseline
 
 ## 📊 실험 결과와 냉정한 해석
 
-아래 표는 업로드된 `results/res/*/final_results.csv` 기준입니다.  
-조건은 주로 `trials=10000`, `steps=30`, `seed=42`입니다.
+실험 결과는 두 단계로 나누어 해석합니다.
 
-### 1. 결과: 정확성 검증
+| 구분 | 목적 | 조건 | 해석 기준 |
+| --- | --- | --- | --- |
+| 기능 검증용 | 모든 mode가 같은 결과를 내는지 확인 | `trials=10000`, `steps=30` | `valid`, `hist_sum`, checksum |
+| 성능 분석용 | 최종 보고서에 사용할 speedup/efficiency 분석 | `trials=1000000`, `steps=50`, `repeats=5` | 평균/최소/표준편차/speedup/efficiency |
+
+### 1. 기능 검증 결과
 
 | 항목 | 결과 |
 | --- | --- |
@@ -378,52 +382,96 @@ raw `./sim` 출력의 `speedup`, `efficiency`는 단일 실행만으로 baseline
 | checksum | 모두 `9158329899332878926` |
 | 의미 | 모든 주요 모드가 같은 simulation 결과를 재현 |
 
-### 2. 결과: 평균 실행시간 요약
+10,000 trials 결과는 기능 검증에는 충분하지만, 실행 시간이 1ms 안팎이라 최종 성능 결론에는 약합니다. 그래서 최종 성능 분석은 아래 Docker Ubuntu Linux 반복 측정 결과를 기준으로 합니다.
 
-| Mode | 조건 | 평균 `time_total` | 1차 해석 |
-| --- | --- | ---: | --- |
-| `seq` | baseline | `0.001524s` | 기준 실행 |
-| `thread` | 1 thread | `0.001475s` | seq와 거의 유사 |
-| `thread` | 2 threads | `0.001092s` | 병렬화 효과 관찰 |
-| `thread` | 4 threads | `0.000749s` | 현재 소규모 결과에서 가장 빠른 thread 조건 |
-| `thread` | 8 threads | `0.000882s` | 4 threads보다 느림 |
-| `pipeline final` | batch 1000 | `0.000954s` | queue 구조 중 비교적 안정적 |
-| `pipeline interactive` | batch 1000 | `0.001112s` | aggregator/merge queue overhead 존재 |
-| `pipeline interactive` | batch 100 | `0.002188s` | batch가 작아 queue 접근 비용 증가 |
-| `pipeline interactive` | batch 10000 | `0.001852s` | batch가 커 load balancing 약화 가능 |
-| `process` | 2 processes | `0.001211s` | fork/IPC overhead 존재 |
-| `process` | 4 processes | `0.001003s` | 2 processes보다 개선되지만 thread 4보다 느림 |
-| `hybrid` | 2 processes x 2 threads | `0.001128s` | 구조는 정상, overhead 존재 |
-| `hybrid` | 2 processes x 4 threads | `0.001264s` | 작은 workload에서는 과설계 가능 |
-
-### 3. 이 수치로 주장 가능한 것
-
-- ✅ 모든 모드가 `valid=1`과 동일 checksum을 보여 기능적 정확성은 확인됐습니다.
-- ✅ 10,000 trials 조건에서는 `thread + reduce + 4 threads`가 가장 실용적으로 보입니다.
-- ✅ `8 threads`가 `4 threads`보다 느려지는 결과는 thread 증가가 항상 성능 향상으로 이어지지 않음을 보여줍니다.
-- ✅ interactive merge는 가능한 구조이지만, queue와 aggregator overhead가 있음을 보여줍니다.
-- ✅ process/hybrid는 정상 동작하지만 작은 workload에서는 fork/IPC/thread 생성 비용이 성능을 제한할 수 있습니다.
-
-### 4. 아직 주장하면 위험한 것
-
-- ❌ “thread 4개가 항상 최적이다”
-- ❌ “process는 항상 thread보다 느리다”
-- ❌ “interactive merge는 항상 비효율적이다”
-- ❌ “현재 수치만으로 최종 speedup/efficiency를 확정할 수 있다”
-
-이유는 간단합니다. 현재 업로드 결과는 대부분 1ms 안팎입니다.  
-이 정도 시간에서는 OS scheduler noise, Docker/macOS 환경 차이, measurement jitter가 크게 작용합니다.
-
-### 5. 다음 실험에서 보강할 것
-
-최종 보고서용 성능 결론은 다음 조건으로 다시 측정해야 합니다.
+### 2. 최종 성능 분석 조건
 
 ```text
-trials = 100000 이상
-가능하면 trials = 1000000 이상
-반복 횟수 = 5회 이상
-환경 = Docker Ubuntu Linux, WSL2 Ubuntu, 또는 일반 Linux
+Docker image = ubuntu:22.04
+trials = 1000000
+steps = 50
+repeats = 5
+pre_work = 50000
+post_work = 10000
+sequential baseline avg = 0.099473s
 ```
+
+결과 파일:
+
+```text
+results/csv/docker_1m/final_raw.csv
+results/csv/docker_1m/final_analyzed.csv
+results/csv/docker_1m/final_summary.md
+```
+
+단, Docker Desktop은 macOS/Windows 위 Linux VM에서 실행됩니다. 따라서 이 결과는 “Docker Ubuntu Linux container 기준 반복 측정 결과”이지, 순수 물리 Linux 결과라고 주장하면 안 됩니다.
+
+### 3. 1,000,000 trials 상위 성능 결과
+
+| Case | Avg time | Min time | Stdev | Speedup | Efficiency | Valid | Checksum |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `thread_8_reduce` | `0.020732s` | `0.020030s` | `0.000601s` | `4.798x` | `0.600` | 1 | match |
+| `hybrid_2x4` | `0.023281s` | `0.020878s` | `0.002841s` | `4.273x` | `0.534` | 1 | match |
+| `hybrid_4x2` | `0.023545s` | `0.020877s` | `0.004660s` | `4.225x` | `0.528` | 1 | match |
+| `thread_4_reduce` | `0.029020s` | `0.028023s` | `0.001494s` | `3.428x` | `0.857` | 1 | match |
+| `pipeline_final_b1000` | `0.029900s` | `0.027392s` | `0.004725s` | `3.327x` | `0.832` | 1 | match |
+
+### 4. Thread synchronization 비교
+
+| Case | Avg time | Speedup | Valid | Checksum | 해석 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `thread_4_reduce` | `0.029020s` | `3.428x` | 1 | match | thread-local result 후 병합. 정확성과 성능 균형이 좋음 |
+| `thread_4_mutex` | `0.132535s` | `0.751x` | 1 | match | 매 trial마다 lock을 잡아 contention이 큼 |
+| `thread_4_nosync` | `0.040384s` | `2.463x` | 0 | mismatch | 빠르게 보일 수 있지만 결과가 틀림 |
+
+이 비교는 synchronization의 필요성을 가장 직접적으로 보여줍니다.  
+`nosync`는 성능 수치만 보면 괜찮아 보일 수 있지만, `valid=0`이고 checksum이 sequential과 다르므로 사용할 수 없습니다.
+
+### 5. Process / Hybrid 비교
+
+| Case | Avg time | Speedup | Efficiency | 해석 |
+| --- | ---: | ---: | ---: | --- |
+| `process_1_pipe` | `0.103178s` | `0.964x` | `0.964` | 단일 child는 fork/IPC overhead 때문에 sequential보다 약함 |
+| `process_2_pipe` | `0.057633s` | `1.726x` | `0.863` | workload가 커지면서 process 병렬화 효과 발생 |
+| `process_4_pipe` | `0.030225s` | `3.291x` | `0.823` | multi-process 병렬화 효과가 명확함 |
+| `hybrid_2x4` | `0.023281s` | `4.273x` | `0.534` | process 격리 + 내부 thread 병렬화 효과 |
+| `hybrid_4x2` | `0.023545s` | `4.225x` | `0.528` | 비슷한 worker 수에서 hybrid trade-off 확인 가능 |
+
+process/hybrid는 작은 workload에서는 overhead가 크지만, `1,000,000 trials`에서는 병렬화 효과가 뚜렷해집니다. 다만 hybrid는 구조가 복잡하므로 “항상 최적”이 아니라 “process와 thread의 역할 분리를 보여주는 확장 구조”로 해석하는 것이 안전합니다.
+
+### 6. Pipeline / Merge 비교
+
+| Case | Avg time | Speedup | 해석 |
+| --- | ---: | ---: | --- |
+| `pipeline_final_b1000` | `0.029900s` | `3.327x` | final reduce가 가장 단순하고 안정적 |
+| `pipeline_interactive_b1000` | `0.033507s` | `2.969x` | 중간 병합 가능하지만 queue/aggregator overhead 존재 |
+| `pipeline_interactive_b100` | `0.063280s` | `1.572x` | batch가 너무 작으면 queue 접근과 wake-up 비용이 커짐 |
+| `pipeline_interactive_b10000` | `0.030529s` | `3.258x` | queue overhead는 작지만 load balancing은 약해질 수 있음 |
+
+interactive merge는 final reduce보다 항상 빠르지는 않습니다.  
+하지만 현실 시스템처럼 partial result를 실행 중간에 계속 집계할 수 있다는 점에서 OS synchronization 분석 가치가 있습니다.
+
+### 7. 이 결과로 주장 가능한 것 / 위험한 것
+
+✅ 주장 가능한 것:
+
+- 정상 mode는 모두 `valid=1`이고 sequential checksum과 일치합니다.
+- 이번 Docker Ubuntu Linux 조건에서는 `thread_8_reduce`가 가장 빠른 평균 실행시간을 보였습니다.
+- `thread_4_reduce`는 `thread_8_reduce`보다 느리지만 efficiency가 높아 worker 사용 효율이 좋습니다.
+- `mutex`는 정확하지만 lock contention 때문에 성능이 크게 나쁩니다.
+- `nosync`는 결과가 깨지므로 synchronization 필요성을 보여주는 실패 사례입니다.
+- process/hybrid는 workload가 커질수록 병렬화 효과를 보여줍니다.
+- interactive merge는 중간 병합이 가능하지만 queue/aggregator overhead가 존재합니다.
+
+❌ 위험한 주장:
+
+- “thread 8개가 항상 최적이다”
+- “process는 항상 thread보다 느리다”
+- “hybrid가 모든 조건에서 가장 좋다”
+- “pipeline interactive가 final reduce보다 성능이 좋다”
+- “Docker Desktop 결과가 순수 물리 Linux 결과와 완전히 같다”
+
+더 자세한 재현 절차와 Linux/Windows WSL 실행 방법은 [`docs/reproducible_linux_experiment_guide.md`](docs/reproducible_linux_experiment_guide.md)에 정리되어 있습니다.
 
 ---
 
