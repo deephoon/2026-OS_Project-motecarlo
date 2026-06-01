@@ -83,6 +83,33 @@ Amdahl stress 실험:
 
 이 보강의 목적은 “새 기능을 많이 넣었다”가 아니라, 교수님 피드백에 맞춰 **동기화 비용, IPC 비용, workload imbalance, queue scheduling 필요성**을 실험으로 방어할 수 있게 만드는 것입니다.
 
+### Docker 1M 재검증 결과
+
+새로 추가한 `--ipc shm`, `--workload skewed`까지 포함해 Docker Ubuntu에서 `trials=1000000`, `steps=50`, `repeats=5`로 다시 측정했습니다.
+
+| 조건 | 주요 결과 | 해석 |
+| --- | --- | --- |
+| uniform | `thread_8_reduce`: 0.021111s, 4.481x | 균등 workload에서는 thread reduce가 가장 강함 |
+| uniform | `process_4_shm`: 0.028469s vs `process_4_pipe`: 0.030282s | shm이 약간 유리하지만 차이는 작음 |
+| uniform | `pipeline_final_b1000`: 0.029459s vs `pipeline_interactive_b1000`: 0.030199s | interactive merge는 구조적 의미가 있지만 overhead 존재 |
+| skewed | `thread_4_reduce`: 0.060584s | static partition이 불균등 workload에 약해짐 |
+| skewed | `pipeline_final_b1000`: 0.036921s | queue scheduling이 imbalance를 완화 |
+| skewed | `hybrid_4x2`: 0.035298s | process + thread 조합이 skewed 조건에서 가장 빠른 그룹 |
+
+정확성 검증:
+
+- `process_*_shm`, `hybrid_2x4_shm`: 모두 `valid=1`, checksum match
+- `skewed` 조건: dummy CPU work만 추가하므로 checksum 유지
+- `thread_4_nosync`: 두 조건 모두 `valid=0`, checksum mismatch로 race condition 증거 유지
+
+자세한 검증 문서:
+
+```text
+docs/docker_shm_skew_validation.md
+results/csv/docker_1m_shm_uniform/final_analyzed.csv
+results/csv/docker_1m_shm_skewed/final_analyzed.csv
+```
+
 ---
 
 ## 📌 프로젝트 가이드 요구사항 대응

@@ -5,6 +5,8 @@ TRIALS=${TRIALS:-100000}
 STEPS=${STEPS:-50}
 REPEATS=${REPEATS:-5}
 SEED=${SEED:-42}
+WORKLOAD=${WORKLOAD:-uniform}
+SKEW_FACTOR=${SKEW_FACTOR:-8}
 PRE_WORK=${PRE_WORK:-50000}
 POST_WORK=${POST_WORK:-10000}
 OUT_DIR=${OUT_DIR:-results/csv}
@@ -28,6 +30,8 @@ run_case() {
         --trials "$TRIALS" \
         --steps "$STEPS" \
         --seed "$SEED" \
+        --workload "$WORKLOAD" \
+        --skew-factor "$SKEW_FACTOR" \
         --pre-work "$PRE_WORK" \
         --post-work "$POST_WORK" \
         --metrics-detail 1 | sed -n '2p')
