@@ -38,7 +38,7 @@
 | --- | --- | --- |
 | OS 개념 설명 강화 | process, thread, synchronization, IPC, scheduling, pipeline, Amdahl's Law가 코드 어디에 들어갔는지 README에 상세 정리 | `README.md` |
 | 개념적 실행 흐름 정리 | CLI parsing → Config → pre-processing → mode별 실행 → merge → post-processing → CSV 출력 흐름 추가 | `README.md` |
-| 최종 성능 실험 | Docker Desktop 기반 Ubuntu 22.04 container에서 `trials=1000000`, `steps=50`, `repeats=5` 조건으로 반복 측정 | `results/csv/docker_1m/final_analyzed.csv` |
+| 최종 성능 실험 | Docker Desktop 기반 Ubuntu 22.04 container에서 `trials=1000000`, `steps=50`, `repeats=5` 조건으로 반복 측정 | `results/csv/docker_1m_shm_uniform/final_analyzed.csv` |
 | Amdahl's Law 보강 | `PRE_WORK=50000000`, `POST_WORK=10000000` stress 실험으로 순차 구간이 커질 때 speedup이 제한됨을 확인 | `results/csv/amdahl_stress/final_analyzed.csv` |
 | CPU/memory 측정 | `seq`, `thread_8_reduce`, `hybrid_2x4`를 `/usr/bin/time -v`로 측정해 CPU 사용률과 RSS 확보 | `docs/final_validation_report.md` |
 | 발표용 그래프 생성 | thread scaling, sync 비교, process/hybrid, pipeline merge, stage time, Amdahl stress 그래프 생성 | `results/graphs/*.svg` |
@@ -49,14 +49,15 @@
 핵심 보강 결과:
 
 ```text
-기본 성능 실험:
-  thread_8_reduce speedup = 4.798x
+최종 uniform 성능 실험:
+  thread_8_reduce speedup = 4.481x
 
 Amdahl stress 실험:
   thread_8_reduce speedup = 1.443x
 
 해석:
-  순차 pre/post 구간을 크게 만들면 thread 수를 늘려도 speedup이 제한된다.
+  같은 Docker Desktop 기반 Ubuntu container에서도 순차 pre/post 구간을 크게 만들면
+  thread 수를 늘려도 speedup이 제한된다.
   이는 Amdahl's Law를 보여주는 최종 보강 근거로 사용할 수 있다.
 ```
 
@@ -154,7 +155,7 @@ results/csv/docker_1m_shm_skewed/final_analyzed.csv
 | synchronization 문제 정의 및 해결 | `nosync` race condition, `mutex`, `reduce`, queue mutex/condvar 비교 |
 | parent sequential vs child process 비교 | `--mode seq`와 `--mode process` 결과 비교 |
 | single/multi process와 single/multi thread 비교 | `thread 1/2/4/8`, `process 2/4`, `hybrid 2x2/2x4` 실험 |
-| process와 thread 역할 구분 | process는 큰 simulation group, thread는 내부 batch 계산 담당 |
+| process와 thread 역할 구분 | `process`는 child process만 사용, `hybrid`는 child 내부 pthread까지 사용하는 구조로 분리 |
 | synchronization 사용/미사용 비교 | `nosync` vs `mutex` vs `reduce` |
 | 다양한 test vector | trials, steps, threads, processes, batch size, merge mode 변경 가능 |
 | 정량적 성능 분석 | `time_total`, `T_pre`, `T_compute`, `T_sync`, `T_ipc`, `T_merge`, `T_post`, queue wait counters, throughput, speedup, efficiency 후처리 |
@@ -562,7 +563,7 @@ Pre-processing
 | 시작하자마자 바로 병렬화되어 너무 쉬움 | pre-processing과 post-processing stage를 추가 |
 | 모든 trial이 끝난 뒤 한 번만 merge하면 너무 단순함 | interactive merge와 aggregator thread 추가 |
 | mutex만으로 queue empty/full 처리가 부족함 | condition variable로 wait/signal 보완 |
-| process와 thread 역할 차이가 약함 | process는 큰 작업 단위, thread는 내부 계산 병렬화로 분리 |
+| process와 thread 역할 차이가 약함 | `process`는 child 내부 thread 없이 process만 사용하고, `hybrid`에서만 child 내부 pthread를 생성하도록 분리 |
 | 성능 저하 원인을 설명하기 어려움 | stage time과 throughput 지표 추가 |
 | Amdahl's Law가 잘 드러나지 않음 | `--pre-work`, `--post-work`로 순차 stage 부하를 조절 가능하게 추가 |
 | static partition이 너무 잘 작동함 | `--workload skewed`로 load imbalance 시나리오 추가 |
@@ -741,6 +742,20 @@ parent process
 
 `process` mode에서는 child process가 독립된 address space에서 계산합니다.  
 따라서 결과 공유를 위해 pipe 또는 shared memory IPC가 필요합니다.
+
+중요한 구분:
+
+```text
+process mode:
+  child process만 병렬 단위로 사용
+  child 내부에서 pthread를 만들지 않음
+
+hybrid mode:
+  child process를 만들고
+  각 child 내부에서 다시 pthread worker를 생성
+```
+
+따라서 `process`와 `hybrid`의 차이는 단순 옵션 차이가 아니라, **process-only 병렬화와 process+thread 계층적 병렬화의 차이**입니다.
 
 #### `hybrid`
 
@@ -1055,11 +1070,11 @@ Parent
   --trials 10000 --steps 30 --ipc pipe --seed 42
 ```
 
-process와 thread의 역할을 분리합니다.
+process와 thread의 역할을 분리합니다. 순수 `process` mode와 달리, `hybrid` mode에서는 child process 내부에서 pthread worker를 다시 생성합니다.
 
 | 구성 | 역할 |
 | --- | --- |
-| Parent process | child 생성, pipe 수신, 최종 merge |
+| Parent process | child 생성, pipe/shm 수신, 최종 merge |
 | Child process | 큰 simulation group 담당 |
 | Thread worker | child 내부 trial range 병렬 계산 |
 | Pipe/Shm IPC | child result를 parent로 전달 |
@@ -1212,17 +1227,19 @@ Docker image = ubuntu:22.04
 trials = 1000000
 steps = 50
 repeats = 5
+workload = uniform
+skew_factor = 8
 pre_work = 50000
 post_work = 10000
-sequential baseline avg = 0.099473s
+sequential baseline avg = 0.094601s
 ```
 
 결과 파일:
 
 ```text
-results/csv/docker_1m/final_raw.csv
-results/csv/docker_1m/final_analyzed.csv
-results/csv/docker_1m/final_summary.md
+results/csv/docker_1m_shm_uniform/final_raw.csv
+results/csv/docker_1m_shm_uniform/final_analyzed.csv
+results/csv/docker_1m_shm_uniform/final_summary.md
 ```
 
 단, Docker Desktop은 macOS/Windows 위 Linux VM에서 실행됩니다. 따라서 이 결과는 “Docker Desktop 기반 Ubuntu 22.04 container 기준 반복 측정 결과”이지, 순수 물리 Linux 결과라고 주장하면 안 됩니다. 최종 보고서에서는 절대 실행 시간보다 **동일 환경 안에서 mode별 상대 차이**를 중심으로 해석해야 합니다.
@@ -1231,19 +1248,19 @@ results/csv/docker_1m/final_summary.md
 
 | Case | Avg time | Min time | Stdev | Speedup | Efficiency | Valid | Checksum |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `thread_8_reduce` | `0.020732s` | `0.020030s` | `0.000601s` | `4.798x` | `0.600` | 1 | match |
-| `hybrid_2x4` | `0.023281s` | `0.020878s` | `0.002841s` | `4.273x` | `0.534` | 1 | match |
-| `hybrid_4x2` | `0.023545s` | `0.020877s` | `0.004660s` | `4.225x` | `0.528` | 1 | match |
-| `thread_4_reduce` | `0.029020s` | `0.028023s` | `0.001494s` | `3.428x` | `0.857` | 1 | match |
-| `pipeline_final_b1000` | `0.029900s` | `0.027392s` | `0.004725s` | `3.327x` | `0.832` | 1 | match |
+| `thread_8_reduce` | `0.021111s` | `0.020345s` | `0.000774s` | `4.481x` | `0.560` | 1 | match |
+| `hybrid_2x4_shm` | `0.021997s` | `0.019356s` | `0.001956s` | `4.301x` | `0.538` | 1 | match |
+| `hybrid_2x4` | `0.022467s` | `0.021510s` | `0.000948s` | `4.211x` | `0.526` | 1 | match |
+| `hybrid_4x2` | `0.023711s` | `0.017809s` | `0.005090s` | `3.990x` | `0.499` | 1 | match |
+| `thread_4_reduce` | `0.027202s` | `0.026171s` | `0.001320s` | `3.478x` | `0.869` | 1 | match |
 
 ### 4. Thread synchronization 비교
 
 | Case | Avg time | Speedup | Valid | Checksum | 해석 |
 | --- | ---: | ---: | ---: | ---: | --- |
-| `thread_4_reduce` | `0.029020s` | `3.428x` | 1 | match | thread-local result 후 병합. 정확성과 성능 균형이 좋음 |
-| `thread_4_mutex` | `0.132535s` | `0.751x` | 1 | match | 매 trial마다 lock을 잡아 contention이 큼 |
-| `thread_4_nosync` | `0.040384s` | `2.463x` | 0 | mismatch | 빠르게 보일 수 있지만 결과가 틀림 |
+| `thread_4_reduce` | `0.027202s` | `3.478x` | 1 | match | thread-local result 후 병합. 정확성과 성능 균형이 좋음 |
+| `thread_4_mutex` | `0.188269s` | `0.502x` | 1 | match | 매 trial마다 lock을 잡아 contention이 큼 |
+| `thread_4_nosync` | `0.034111s` | `2.773x` | 0 | mismatch | 빠르게 보일 수 있지만 결과가 틀림 |
 
 이 비교는 synchronization의 필요성을 가장 직접적으로 보여줍니다.  
 `nosync`는 성능 수치만 보면 괜찮아 보일 수 있지만, `valid=0`이고 checksum이 sequential과 다르므로 사용할 수 없습니다.
@@ -1252,37 +1269,86 @@ results/csv/docker_1m/final_summary.md
 
 | Case | Avg time | Speedup | Efficiency | 해석 |
 | --- | ---: | ---: | ---: | --- |
-| `process_1_pipe` | `0.103178s` | `0.964x` | `0.964` | 단일 child는 fork/IPC overhead 때문에 sequential보다 약함 |
-| `process_2_pipe` | `0.057633s` | `1.726x` | `0.863` | workload가 커지면서 process 병렬화 효과 발생 |
-| `process_4_pipe` | `0.030225s` | `3.291x` | `0.823` | multi-process 병렬화 효과가 명확함 |
-| `hybrid_2x4` | `0.023281s` | `4.273x` | `0.534` | process 격리 + 내부 thread 병렬화 효과 |
-| `hybrid_4x2` | `0.023545s` | `4.225x` | `0.528` | 비슷한 worker 수에서 hybrid trade-off 확인 가능 |
+| `process_1_pipe` | `0.099585s` | `0.950x` | `0.950` | 단일 child는 fork/IPC overhead 때문에 sequential보다 약함 |
+| `process_2_pipe` | `0.052649s` | `1.797x` | `0.898` | workload가 커지면서 process 병렬화 효과 발생 |
+| `process_4_pipe` | `0.030282s` | `3.124x` | `0.781` | 순수 process 병렬화 효과가 보임 |
+| `process_4_shm` | `0.028469s` | `3.323x` | `0.831` | 같은 process 구조에서 pipe보다 shm이 약간 유리 |
+| `hybrid_2x4` | `0.022467s` | `4.211x` | `0.526` | child 내부 pthread를 사용하는 계층적 병렬화 |
+| `hybrid_2x4_shm` | `0.021997s` | `4.301x` | `0.538` | hybrid + shm 조합, 이번 uniform 조건에서 상위권 |
 
-process/hybrid는 작은 workload에서는 overhead가 크지만, `1,000,000 trials`에서는 병렬화 효과가 뚜렷해집니다. 다만 hybrid는 구조가 복잡하므로 “항상 최적”이 아니라 “process와 thread의 역할 분리를 보여주는 확장 구조”로 해석하는 것이 안전합니다.
+`process` mode는 child 내부 thread가 없는 순수 process 비교군입니다. `hybrid` mode는 child process 내부에서 pthread worker를 다시 생성하는 계층적 병렬화입니다. 이 둘을 섞어서 설명하면 안 됩니다. 다만 hybrid는 구조가 복잡하므로 “항상 최적”이 아니라 “process와 thread의 역할 분리를 보여주는 확장 구조”로 해석하는 것이 안전합니다.
 
 ### 6. Pipeline / Merge 비교
 
 | Case | Avg time | Speedup | 해석 |
 | --- | ---: | ---: | --- |
-| `pipeline_final_b1000` | `0.029900s` | `3.327x` | final reduce가 가장 단순하고 안정적 |
-| `pipeline_interactive_b1000` | `0.033507s` | `2.969x` | 중간 병합 가능하지만 queue/aggregator overhead 존재 |
-| `pipeline_interactive_b100` | `0.063280s` | `1.572x` | batch가 너무 작으면 queue 접근과 wake-up 비용이 커짐 |
-| `pipeline_interactive_b10000` | `0.030529s` | `3.258x` | queue overhead는 작지만 load balancing은 약해질 수 있음 |
+| `pipeline_final_b1000` | `0.029459s` | `3.211x` | final reduce가 가장 단순하고 안정적 |
+| `pipeline_interactive_b1000` | `0.030199s` | `3.133x` | 중간 병합 가능하지만 queue/aggregator overhead 존재 |
+| `pipeline_interactive_b100` | `0.064609s` | `1.464x` | batch가 너무 작으면 queue 접근과 wake-up 비용이 커짐 |
+| `pipeline_interactive_b10000` | `0.028194s` | `3.355x` | queue overhead는 작지만 load balancing은 약해질 수 있음 |
 
 interactive merge는 final reduce보다 항상 빠르지는 않습니다.  
 하지만 현실 시스템처럼 partial result를 실행 중간에 계속 집계할 수 있다는 점에서 OS synchronization 분석 가치가 있습니다.
 
-### 7. 이 결과로 주장 가능한 것 / 위험한 것
+### 7. Skewed workload 추가 검증
+
+최종 기준 uniform 결과만으로는 static partition도 충분히 좋아 보일 수 있습니다. 그래서 `--workload skewed --skew-factor 8` 조건을 별도로 측정했습니다.
+
+결과 파일:
+
+```text
+results/csv/docker_1m_shm_skewed/final_raw.csv
+results/csv/docker_1m_shm_skewed/final_analyzed.csv
+results/csv/docker_1m_shm_skewed/final_summary.md
+```
+
+| Case | Avg time | Speedup | Efficiency | Valid | 해석 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `thread_4_reduce` | `0.060584s` | `2.120x` | `0.530` | 1 | static partition이 불균등 workload에 약해짐 |
+| `thread_8_reduce` | `0.037207s` | `3.453x` | `0.432` | 1 | worker 수 증가로 보완되지만 efficiency는 낮음 |
+| `pipeline_final_b1000` | `0.036921s` | `3.480x` | `0.870` | 1 | queue scheduling이 imbalance를 완화 |
+| `pipeline_interactive_b1000` | `0.037946s` | `3.386x` | `0.846` | 1 | 중간 병합 가능하지만 final보다 overhead 있음 |
+| `hybrid_4x2` | `0.035298s` | `3.640x` | `0.455` | 1 | 이번 Docker 조건에서 가장 빠른 그룹 |
+
+이 결과의 핵심은 “pipeline이 항상 빠르다”가 아닙니다. **불균등 workload에서는 static partition의 약점이 드러나고, queue scheduling이 그 약점을 완화할 수 있다**는 점입니다.
+
+### 8. Stage metric 해석 주의
+
+보고서에서 반드시 구분해야 할 점이 있습니다.
+
+```text
+T_total:
+  wall-clock 기준 전체 실행 시간
+
+T_sync:
+  여러 thread에서 발생한 mutex lock wait,
+  condition variable wait,
+  waitpid 대기 시간을 관측/누적한 synchronization overhead indicator
+```
+
+따라서 pipeline mode에서는 `T_sync`가 여러 worker의 lock/condition wait를 누적하므로 `T_pre + T_compute + T_sync + T_ipc + T_merge + T_post`가 `T_total`과 정확히 일치하지 않을 수 있습니다. 이는 측정 오류가 아니라, `T_sync`를 wall-clock stage가 아니라 **동기화 비용 비교용 보조 지표**로 설계했기 때문입니다.
+
+교수님 질문에 대한 답변은 다음처럼 준비하면 됩니다.
+
+```text
+T_total은 전체 프로그램의 wall-clock time입니다.
+반면 T_sync는 여러 thread에서 발생한 lock wait와 condition wait의 누적값입니다.
+따라서 T_sync는 total time을 분해하는 단일 stage라기보다,
+어떤 조건에서 synchronization overhead가 커지는지 비교하기 위한 지표입니다.
+```
+
+### 9. 이 결과로 주장 가능한 것 / 위험한 것
 
 ✅ 주장 가능한 것:
 
 - 정상 mode는 모두 `valid=1`이고 sequential checksum과 일치합니다.
-- 이번 Docker Desktop 기반 Ubuntu container 조건에서는 `thread_8_reduce`가 가장 빠른 평균 실행시간을 보였습니다.
+- 최종 uniform 기준 실험에서는 `thread_8_reduce`가 가장 빠른 평균 실행시간을 보였습니다.
 - `thread_4_reduce`는 `thread_8_reduce`보다 느리지만 efficiency가 높아 worker 사용 효율이 좋습니다.
 - `mutex`는 정확하지만 lock contention 때문에 성능이 크게 나쁩니다.
 - `nosync`는 결과가 깨지므로 synchronization 필요성을 보여주는 실패 사례입니다.
 - process/hybrid는 workload가 커질수록 병렬화 효과를 보여줍니다.
 - interactive merge는 중간 병합이 가능하지만 queue/aggregator overhead가 존재합니다.
+- skewed workload에서는 queue scheduling이 static partition의 imbalance를 완화할 수 있습니다.
 
 ❌ 위험한 주장:
 
@@ -1292,6 +1358,7 @@ interactive merge는 final reduce보다 항상 빠르지는 않습니다.
 - “pipeline interactive가 final reduce보다 성능이 좋다”
 - “Docker Desktop 결과가 순수 물리 Linux 결과와 완전히 같다”
 - “다른 CPU/다른 Docker resource limit에서도 동일한 순위가 나온다”
+- “stage time 항목을 모두 더하면 반드시 `T_total`과 같아야 한다”
 
 더 자세한 재현 절차와 Linux/Windows WSL 실행 방법은 [`docs/reproducible_linux_experiment_guide.md`](docs/reproducible_linux_experiment_guide.md)에 정리되어 있습니다.
 최종 제출 전 검증 결과, Amdahl stress 실험, CPU/memory 측정, 그래프 목록은 [`docs/final_validation_report.md`](docs/final_validation_report.md)에 정리했습니다.
@@ -1354,7 +1421,7 @@ PRE_WORK=50000000 POST_WORK=10000000 \
 OUT_DIR=results/csv/amdahl_stress scripts/run_final.sh
 ```
 
-이 조건에서는 `thread_8_reduce` speedup이 기본 실험의 `4.798x`에서 `1.443x`로 제한되어, 순차 구간이 커질수록 병렬화 효율이 제한되는 현상을 확인했습니다.
+이 조건에서는 `thread_8_reduce` speedup이 최종 uniform 기준 실험의 `4.481x`보다 훨씬 낮은 `1.443x`로 제한되어, 순차 구간이 커질수록 병렬화 효율이 제한되는 현상을 확인했습니다.
 
 최종 발표용 그래프는 `results/graphs/`에 생성되어 있습니다.
 
@@ -1461,9 +1528,9 @@ cd 2026-OS_Project-motecarlo
 docker build -t os-montecarlo-risk .
 
 docker run --rm `
-  -v "${PWD}/results/csv/docker_1m:/workspace/results/csv" `
+  -v "${PWD}/results:/workspace/results" `
   os-montecarlo-risk `
-  sh -lc "TRIALS=1000000 STEPS=50 REPEATS=5 PRE_WORK=50000 POST_WORK=10000 OUT_DIR=results/csv scripts/run_final.sh"
+  sh -lc "TRIALS=1000000 STEPS=50 REPEATS=5 WORKLOAD=uniform SKEW_FACTOR=8 PRE_WORK=50000 POST_WORK=10000 OUT_DIR=results/csv/docker_1m_shm_uniform scripts/run_final.sh"
 ```
 
 ---
@@ -1570,17 +1637,25 @@ pidstat -u -r -C sim 1
 
 ---
 
-## 🛠️ TODO
+## ✅ Final Checklist
 
-| 우선순위 | 작업 | 이유 |
+| 항목 | 상태 | 근거 |
 | --- | --- | --- |
-| 1 | Docker Desktop Ubuntu container에서 큰 workload 반복 측정 | 발표용 상대 비교 수치 확보 |
-| 2 | Docker Desktop Ubuntu container에서 `final_analyzed.csv` 생성 | sequential baseline 기준 speedup/efficiency 확보 |
-| 3 | 5회 이상 반복 측정 summary 검토 | 평균/최소/표준편차 해석 필요 |
-| 4 | CPU/memory 캡처 | `pidstat`, `/usr/bin/time -v` 근거 확보 |
-| 5 | 그래프 생성 | 보고서 가독성 향상 |
-| 6 | skewed workload 최종 반복 실험 | static partition과 queue scheduling 차이 검증 |
-| 7 | semaphore queue 비교 | mutex + condvar와 overhead 비교 가능 |
+| Docker Desktop Ubuntu container 큰 workload 반복 측정 | 완료 | `results/csv/docker_1m_shm_uniform/final_analyzed.csv` |
+| `final_analyzed.csv` 생성 | 완료 | uniform/skewed 모두 raw/analyzed/summary 저장 |
+| 5회 이상 반복 측정 summary 검토 | 완료 | `repeats=5`, 평균/최소/표준편차 포함 |
+| shared memory IPC 검증 | 완료 | `process_*_shm`, `hybrid_2x4_shm` 모두 `valid=1` |
+| skewed workload 최종 반복 실험 | 완료 | `results/csv/docker_1m_shm_skewed/final_analyzed.csv` |
+| 그래프 생성 | 완료 | `results/graphs/*.svg` |
+| CPU/memory 캡처 | 부분 완료 | `/usr/bin/time -v` 기반 결과 있음. 최종 보고서에는 캡처 이미지 정리 권장 |
+
+## 🔮 Future Work
+
+| 항목 | 처리 |
+| --- | --- |
+| semaphore queue 비교 | 현재 최종 범위에서는 제외. mutex + condition variable 선택 이유를 설명하는 것으로 충분 |
+| child process 내부 metrics shared table | `T_ipc`를 child write 시간까지 포함하려면 추가 가능 |
+| physical Linux 재측정 | 가능하면 부록 검증으로 추가. 현재 결과는 Docker Desktop Ubuntu container 기준 |
 
 ---
 
