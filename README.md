@@ -38,7 +38,7 @@
 | --- | --- | --- |
 | OS 개념 설명 강화 | process, thread, synchronization, IPC, scheduling, pipeline, Amdahl's Law가 코드 어디에 들어갔는지 README에 상세 정리 | `README.md` |
 | 개념적 실행 흐름 정리 | CLI parsing → Config → pre-processing → mode별 실행 → merge → post-processing → CSV 출력 흐름 추가 | `README.md` |
-| 최종 성능 실험 | Docker Ubuntu Linux에서 `trials=1000000`, `steps=50`, `repeats=5` 조건으로 반복 측정 | `results/csv/docker_1m/final_analyzed.csv` |
+| 최종 성능 실험 | Docker Desktop 기반 Ubuntu 22.04 container에서 `trials=1000000`, `steps=50`, `repeats=5` 조건으로 반복 측정 | `results/csv/docker_1m/final_analyzed.csv` |
 | Amdahl's Law 보강 | `PRE_WORK=50000000`, `POST_WORK=10000000` stress 실험으로 순차 구간이 커질 때 speedup이 제한됨을 확인 | `results/csv/amdahl_stress/final_analyzed.csv` |
 | CPU/memory 측정 | `seq`, `thread_8_reduce`, `hybrid_2x4`를 `/usr/bin/time -v`로 측정해 CPU 사용률과 RSS 확보 | `docs/final_validation_report.md` |
 | 발표용 그래프 생성 | thread scaling, sync 비교, process/hybrid, pipeline merge, stage time, Amdahl stress 그래프 생성 | `results/graphs/*.svg` |
@@ -62,9 +62,37 @@ Amdahl stress 실험:
 
 주의할 점:
 
-- Docker Desktop 결과는 macOS/Windows 위 Linux VM 기준이므로 순수 물리 Linux 절대 성능으로 주장하지 않습니다.
+- Docker Desktop 결과는 macOS/Windows 위 Linux VM 기준이므로 **순수 물리 Linux 절대 성능으로 주장하지 않습니다.**
+- 본 README의 성능 수치는 “동일한 Docker Desktop Ubuntu container 안에서 mode별 상대 비교를 수행한 결과”로 해석합니다.
 - 최종 성능 순위는 단일 실행이 아니라 `final_analyzed.csv`의 5회 반복 평균 기준으로 해석합니다.
 - `nosync`는 빠르게 보일 수 있지만 `valid=0`, checksum mismatch이므로 race condition 실패 사례로 사용합니다.
+
+### 실험 환경 해석 원칙
+
+이 프로젝트의 성능 결과는 크게 두 층으로 구분해야 합니다.
+
+| 구분 | 의미 | 보고서에서의 표현 |
+| --- | --- | --- |
+| Docker Desktop Ubuntu container | macOS/Windows 위 Linux VM에서 실행한 container 결과 | “Docker Desktop 기반 Ubuntu 22.04 container 반복 측정 결과” |
+| WSL2 Ubuntu | Windows 위 WSL2 Linux kernel/VM에서 실행한 결과 | “WSL2 Ubuntu 환경 교차 검증 결과” |
+| Physical Linux | 실제 Linux가 직접 설치된 PC/서버 결과 | “순수 물리 Linux 결과”라고 부를 수 있음 |
+
+따라서 현재 GitHub에 포함된 CSV는 **Docker Desktop 기반 Ubuntu VM 결과**입니다.
+보고서에서 사용할 때는 다음처럼 쓰는 것이 안전합니다.
+
+```text
+본 실험은 Docker Desktop 기반 Ubuntu 22.04 container에서 수행했다.
+따라서 수치는 순수 물리 Linux의 절대 성능이 아니라,
+동일한 container 환경에서 OS 실행 구조별 상대 차이를 비교하기 위한 결과다.
+```
+
+반대로 다음 표현은 피해야 합니다.
+
+```text
+Linux에서 thread_8_reduce가 절대적으로 가장 빠르다.
+물리 Linux에서도 동일한 시간이 나온다.
+Docker 결과가 native Linux 성능과 같다.
+```
 
 추가 구현 보강 후 현재 CLI는 다음 항목까지 직접 실험할 수 있습니다.
 
@@ -85,7 +113,7 @@ Amdahl stress 실험:
 
 ### Docker 1M 재검증 결과
 
-새로 추가한 `--ipc shm`, `--workload skewed`까지 포함해 Docker Ubuntu에서 `trials=1000000`, `steps=50`, `repeats=5`로 다시 측정했습니다.
+새로 추가한 `--ipc shm`, `--workload skewed`까지 포함해 Docker Desktop 기반 Ubuntu 22.04 container에서 `trials=1000000`, `steps=50`, `repeats=5`로 다시 측정했습니다.
 
 | 조건 | 주요 결과 | 해석 |
 | --- | --- | --- |
@@ -95,6 +123,8 @@ Amdahl stress 실험:
 | skewed | `thread_4_reduce`: 0.060584s | static partition이 불균등 workload에 약해짐 |
 | skewed | `pipeline_final_b1000`: 0.036921s | queue scheduling이 imbalance를 완화 |
 | skewed | `hybrid_4x2`: 0.035298s | process + thread 조합이 skewed 조건에서 가장 빠른 그룹 |
+
+이 표는 “이 환경에서의 상대 비교”입니다. 예를 들어 `hybrid_4x2`가 skewed 조건에서 가장 빠르게 나왔다는 말은 **Docker Desktop 기반 Ubuntu container의 해당 실험 조건에서** 그렇다는 뜻입니다. 물리 Linux, 다른 CPU core 수, 다른 Docker resource limit에서는 순위가 달라질 수 있습니다.
 
 정확성 검증:
 
@@ -129,7 +159,7 @@ results/csv/docker_1m_shm_skewed/final_analyzed.csv
 | 다양한 test vector | trials, steps, threads, processes, batch size, merge mode 변경 가능 |
 | 정량적 성능 분석 | `time_total`, `T_pre`, `T_compute`, `T_sync`, `T_ipc`, `T_merge`, `T_post`, queue wait counters, throughput, speedup, efficiency 후처리 |
 | 문제 인식과 해결 과정 | 단순 병렬화 한계 → pre/post stage → queue/pipeline/interactive merge 도입 |
-| CPU/memory 측정 | Docker Linux, `pidstat`, `/usr/bin/time -v` 사용 계획 정리 |
+| CPU/memory 측정 | Docker Desktop Ubuntu container, WSL2 Ubuntu, native Linux에서 `pidstat`, `/usr/bin/time -v` 사용 계획 정리 |
 | workload imbalance 분석 | `--workload uniform/skewed`, `--skew-factor`로 static partition과 queue scheduling 비교 가능 |
 | AI agent 사용 기록 | OpenAI Codex를 코드/문서 정리에 사용. 최종 보고서에 사용 범위와 prompt 별도 기재 필요 |
 
@@ -1173,7 +1203,7 @@ raw `./sim` 출력의 `speedup`, `efficiency`는 단일 실행만으로 baseline
 | checksum | 모두 `9158329899332878926` |
 | 의미 | 모든 주요 모드가 같은 simulation 결과를 재현 |
 
-10,000 trials 결과는 기능 검증에는 충분하지만, 실행 시간이 1ms 안팎이라 최종 성능 결론에는 약합니다. 그래서 최종 성능 분석은 아래 Docker Ubuntu Linux 반복 측정 결과를 기준으로 합니다.
+10,000 trials 결과는 기능 검증에는 충분하지만, 실행 시간이 1ms 안팎이라 최종 성능 결론에는 약합니다. 그래서 최종 성능 분석은 아래 Docker Desktop 기반 Ubuntu 22.04 container 반복 측정 결과를 기준으로 합니다.
 
 ### 2. 최종 성능 분석 조건
 
@@ -1195,7 +1225,7 @@ results/csv/docker_1m/final_analyzed.csv
 results/csv/docker_1m/final_summary.md
 ```
 
-단, Docker Desktop은 macOS/Windows 위 Linux VM에서 실행됩니다. 따라서 이 결과는 “Docker Ubuntu Linux container 기준 반복 측정 결과”이지, 순수 물리 Linux 결과라고 주장하면 안 됩니다.
+단, Docker Desktop은 macOS/Windows 위 Linux VM에서 실행됩니다. 따라서 이 결과는 “Docker Desktop 기반 Ubuntu 22.04 container 기준 반복 측정 결과”이지, 순수 물리 Linux 결과라고 주장하면 안 됩니다. 최종 보고서에서는 절대 실행 시간보다 **동일 환경 안에서 mode별 상대 차이**를 중심으로 해석해야 합니다.
 
 ### 3. 1,000,000 trials 상위 성능 결과
 
@@ -1247,7 +1277,7 @@ interactive merge는 final reduce보다 항상 빠르지는 않습니다.
 ✅ 주장 가능한 것:
 
 - 정상 mode는 모두 `valid=1`이고 sequential checksum과 일치합니다.
-- 이번 Docker Ubuntu Linux 조건에서는 `thread_8_reduce`가 가장 빠른 평균 실행시간을 보였습니다.
+- 이번 Docker Desktop 기반 Ubuntu container 조건에서는 `thread_8_reduce`가 가장 빠른 평균 실행시간을 보였습니다.
 - `thread_4_reduce`는 `thread_8_reduce`보다 느리지만 efficiency가 높아 worker 사용 효율이 좋습니다.
 - `mutex`는 정확하지만 lock contention 때문에 성능이 크게 나쁩니다.
 - `nosync`는 결과가 깨지므로 synchronization 필요성을 보여주는 실패 사례입니다.
@@ -1261,6 +1291,7 @@ interactive merge는 final reduce보다 항상 빠르지는 않습니다.
 - “hybrid가 모든 조건에서 가장 좋다”
 - “pipeline interactive가 final reduce보다 성능이 좋다”
 - “Docker Desktop 결과가 순수 물리 Linux 결과와 완전히 같다”
+- “다른 CPU/다른 Docker resource limit에서도 동일한 순위가 나온다”
 
 더 자세한 재현 절차와 Linux/Windows WSL 실행 방법은 [`docs/reproducible_linux_experiment_guide.md`](docs/reproducible_linux_experiment_guide.md)에 정리되어 있습니다.
 최종 제출 전 검증 결과, Amdahl stress 실험, CPU/memory 측정, 그래프 목록은 [`docs/final_validation_report.md`](docs/final_validation_report.md)에 정리했습니다.
@@ -1339,11 +1370,20 @@ OUT_DIR=results/csv/amdahl_stress scripts/run_final.sh
 
 ---
 
-## 🐳 Docker Linux 실행
+## 🐳 Docker Desktop Ubuntu Container 실행
 
 macOS에서도 컴파일은 가능하지만, 발표/보고서용 성능 수치는 Linux 기준이 더 적합합니다.
-다만 Docker Desktop은 macOS/Windows 위의 Linux VM에서 실행되므로 **순수 물리 Linux 결과와 완전히 같다고 주장하면 안 됩니다.**  
-보고서에서는 “Docker Ubuntu Linux container에서 반복 측정했다”고 쓰고, 가능하면 팀원 중 Windows 사용자는 WSL2 Ubuntu에서 한 번 더 돌려 교차 확인하는 것이 좋습니다.
+다만 Docker Desktop은 macOS/Windows 위의 Linux VM에서 실행되므로 **순수 물리 Linux 결과와 완전히 같다고 주장하면 안 됩니다.**
+
+보고서에서는 다음 표현을 권장합니다.
+
+```text
+Docker Desktop 기반 Ubuntu 22.04 container에서 반복 측정했다.
+이 결과는 같은 container 환경 안에서 실행 구조별 상대 성능을 비교하기 위한 값이며,
+순수 물리 Linux의 절대 성능으로 일반화하지 않는다.
+```
+
+가능하면 팀원 중 Windows 사용자는 WSL2 Ubuntu에서, Linux 사용자는 native Linux에서 같은 명령을 한 번 더 실행해 교차 확인하는 것이 좋습니다.
 
 ```sh
 docker build -t os-montecarlo-risk .
@@ -1374,6 +1414,8 @@ pidstat -u -r -C sim 1
 따라서 Windows native MinGW 환경보다는 **WSL2 Ubuntu** 또는 **Docker Desktop**을 권장합니다.
 
 ### WSL2 Ubuntu 권장
+
+Windows 팀원이 결과를 보강하려면 Docker Desktop보다 WSL2 Ubuntu를 우선 권장합니다. WSL2도 VM 계층이 있지만, POSIX API와 Linux toolchain을 더 직접적으로 사용할 수 있고, Docker Desktop 결과와 교차 비교하기 좋습니다.
 
 PowerShell 관리자 권한:
 
@@ -1407,6 +1449,8 @@ results/csv/final_summary.md
 ```
 
 ### Windows Docker Desktop
+
+Docker Desktop은 설치와 재현이 쉽지만, 성능 수치는 Docker Desktop의 Linux VM resource 설정에 영향을 받습니다. CPU core/memory 제한이 다르면 실행 시간이 바뀔 수 있으므로, 최종 보고서에는 Docker Desktop 설정도 함께 적는 것이 좋습니다.
 
 PowerShell:
 
@@ -1456,6 +1500,8 @@ CPU/memory 측정:
 ```sh
 pidstat -u -r -C sim 1
 ```
+
+일반 Linux가 실제 PC/서버에 직접 설치되어 있다면 이 결과를 “native Linux” 또는 “physical Linux” 결과로 구분할 수 있습니다. 이 경우에도 CPU 모델, core 수, CPU governor, background load에 따라 수치가 달라지므로 실험 환경을 보고서에 명시해야 합니다.
 
 ---
 
@@ -1528,8 +1574,8 @@ pidstat -u -r -C sim 1
 
 | 우선순위 | 작업 | 이유 |
 | --- | --- | --- |
-| 1 | Docker Linux에서 큰 workload 반복 측정 | 발표용 수치 신뢰도 확보 |
-| 2 | Docker Linux에서 `final_analyzed.csv` 생성 | sequential baseline 기준 speedup/efficiency 확보 |
+| 1 | Docker Desktop Ubuntu container에서 큰 workload 반복 측정 | 발표용 상대 비교 수치 확보 |
+| 2 | Docker Desktop Ubuntu container에서 `final_analyzed.csv` 생성 | sequential baseline 기준 speedup/efficiency 확보 |
 | 3 | 5회 이상 반복 측정 summary 검토 | 평균/최소/표준편차 해석 필요 |
 | 4 | CPU/memory 캡처 | `pidstat`, `/usr/bin/time -v` 근거 확보 |
 | 5 | 그래프 생성 | 보고서 가독성 향상 |
@@ -1545,6 +1591,6 @@ pidstat -u -r -C sim 1
 | `Permission denied` | `chmod +x scripts/run_final.sh scripts/analyze_results.py` |
 | `make: command not found` | `apt-get install -y build-essential make` |
 | `nosync`가 invalid | 정상입니다. race condition 관찰용 모드입니다. |
-| `--ipc shm` 실패 | macOS/Linux feature macro 또는 Docker Linux 환경을 확인합니다. 현재 코드는 `mmap(MAP_SHARED)` 기반입니다. |
+| `--ipc shm` 실패 | macOS/Linux feature macro 또는 Docker/WSL/native Linux 환경을 확인합니다. 현재 코드는 `mmap(MAP_SHARED)` 기반입니다. |
 | 8 threads가 더 느림 | core 수 한계, scheduling/context switching overhead를 확인해야 합니다. |
-| macOS와 Docker 결과 차이 | 최종 수치는 Docker Linux 기준으로 통일하는 것이 좋습니다. |
+| macOS와 Docker 결과 차이 | 최종 수치는 Docker Desktop Ubuntu container 기준으로 통일하되, 물리 Linux 절대 성능으로 일반화하지 않습니다. |
