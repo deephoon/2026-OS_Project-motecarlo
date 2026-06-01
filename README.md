@@ -30,6 +30,43 @@
 
 ---
 
+## ✅ 최종 보강 반영 현황
+
+최종 제출 전 약점으로 지적될 수 있는 부분들을 아래와 같이 추가 보강했습니다.
+
+| 보강 항목 | 반영 내용 | 산출물 |
+| --- | --- | --- |
+| OS 개념 설명 강화 | process, thread, synchronization, IPC, scheduling, pipeline, Amdahl's Law가 코드 어디에 들어갔는지 README에 상세 정리 | `README.md` |
+| 개념적 실행 흐름 정리 | CLI parsing → Config → pre-processing → mode별 실행 → merge → post-processing → CSV 출력 흐름 추가 | `README.md` |
+| 최종 성능 실험 | Docker Ubuntu Linux에서 `trials=1000000`, `steps=50`, `repeats=5` 조건으로 반복 측정 | `results/csv/docker_1m/final_analyzed.csv` |
+| Amdahl's Law 보강 | `PRE_WORK=50000000`, `POST_WORK=10000000` stress 실험으로 순차 구간이 커질 때 speedup이 제한됨을 확인 | `results/csv/amdahl_stress/final_analyzed.csv` |
+| CPU/memory 측정 | `seq`, `thread_8_reduce`, `hybrid_2x4`를 `/usr/bin/time -v`로 측정해 CPU 사용률과 RSS 확보 | `docs/final_validation_report.md` |
+| 발표용 그래프 생성 | thread scaling, sync 비교, process/hybrid, pipeline merge, stage time, Amdahl stress 그래프 생성 | `results/graphs/*.svg` |
+| 재현성 가이드 | Docker, Windows WSL2 Ubuntu, 일반 Linux 실행 방법 정리 | `docs/reproducible_linux_experiment_guide.md` |
+| 최종 검증 리포트 | 기능 검증, 기본 성능, Amdahl stress, CPU/memory, 그래프 목록, 보고서 문장 정리 | `docs/final_validation_report.md` |
+
+핵심 보강 결과:
+
+```text
+기본 성능 실험:
+  thread_8_reduce speedup = 4.798x
+
+Amdahl stress 실험:
+  thread_8_reduce speedup = 1.443x
+
+해석:
+  순차 pre/post 구간을 크게 만들면 thread 수를 늘려도 speedup이 제한된다.
+  이는 Amdahl's Law를 보여주는 최종 보강 근거로 사용할 수 있다.
+```
+
+주의할 점:
+
+- Docker Desktop 결과는 macOS/Windows 위 Linux VM 기준이므로 순수 물리 Linux 절대 성능으로 주장하지 않습니다.
+- 최종 성능 순위는 단일 실행이 아니라 `final_analyzed.csv`의 5회 반복 평균 기준으로 해석합니다.
+- `nosync`는 빠르게 보일 수 있지만 `valid=0`, checksum mismatch이므로 race condition 실패 사례로 사용합니다.
+
+---
+
 ## 📌 프로젝트 가이드 요구사항 대응
 
 `ref/os26_project.pdf`의 핵심 요구사항을 현재 구현과 연결하면 다음과 같습니다.
