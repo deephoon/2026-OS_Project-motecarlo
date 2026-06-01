@@ -63,7 +63,7 @@ Use:
 ```text
 speedup = T_seq / T_parallel
 efficiency = speedup / worker_count
-sequential_fraction_estimate = (T_pre + T_sync + T_merge + T_post) / T_total
+sequential_fraction_estimate = (T_pre + T_sync + T_ipc + T_merge + T_post) / T_total
 ```
 
 ## Throughput Analysis Template

@@ -43,6 +43,8 @@ def group_key(row):
     return (
         row.get("trials", ""),
         row.get("steps", ""),
+        row.get("workload", ""),
+        row.get("skew_factor", ""),
         row.get("pre_work", ""),
         row.get("post_work", ""),
     )
@@ -76,6 +78,7 @@ def main():
         pre = [to_float(r, "time_pre") for r in case_rows]
         compute = [to_float(r, "time_compute") for r in case_rows]
         sync = [to_float(r, "time_sync") for r in case_rows]
+        ipc = [to_float(r, "time_ipc") for r in case_rows]
         merge = [to_float(r, "time_merge") for r in case_rows]
         post = [to_float(r, "time_post") for r in case_rows]
         seq_frac = [to_float(r, "sequential_fraction_estimate") for r in case_rows]
@@ -96,23 +99,33 @@ def main():
             "merge": case_rows[0].get("merge", ""),
             "processes": case_rows[0].get("processes", ""),
             "threads": case_rows[0].get("threads", ""),
+            "ipc": case_rows[0].get("ipc", ""),
             "workers": workers,
             "trials": base_key[0],
             "steps": base_key[1],
-            "pre_work": base_key[2],
-            "post_work": base_key[3],
+            "workload": base_key[2],
+            "skew_factor": base_key[3],
+            "pre_work": base_key[4],
+            "post_work": base_key[5],
             "avg_time_total": f"{avg_time:.6f}",
             "min_time_total": f"{min(times) if times else 0.0:.6f}",
             "stdev_time_total": f"{stdev(times):.6f}",
             "avg_time_pre": f"{mean(pre):.6f}",
             "avg_time_compute": f"{mean(compute):.6f}",
             "avg_time_sync": f"{mean(sync):.6f}",
+            "avg_time_ipc": f"{mean(ipc):.6f}",
             "avg_time_merge": f"{mean(merge):.6f}",
             "avg_time_post": f"{mean(post):.6f}",
             "speedup_vs_seq_avg": f"{speedup:.3f}",
             "efficiency_vs_seq_avg": f"{efficiency:.3f}",
             "avg_sequential_fraction": f"{mean(seq_frac):.3f}",
             "avg_throughput_batches_per_sec": f"{mean(throughput):.1f}",
+            "avg_lock_wait_count": f"{mean([to_float(r, 'lock_wait_count') for r in case_rows]):.1f}",
+            "avg_cond_wait_count": f"{mean([to_float(r, 'cond_wait_count') for r in case_rows]):.1f}",
+            "avg_queue_push_count": f"{mean([to_float(r, 'queue_push_count') for r in case_rows]):.1f}",
+            "avg_queue_pop_count": f"{mean([to_float(r, 'queue_pop_count') for r in case_rows]):.1f}",
+            "avg_ipc_read_count": f"{mean([to_float(r, 'ipc_read_count') for r in case_rows]):.1f}",
+            "avg_ipc_bytes": f"{mean([to_float(r, 'ipc_bytes') for r in case_rows]):.1f}",
             "valid_all": "1" if all(r.get("valid") == "1" for r in case_rows) else "0",
             "checksum_count": len(checksums),
             "matches_seq_checksum": "1" if matches_baseline else "0",
@@ -140,6 +153,8 @@ def main():
             f.write(f"- trials: {first['trials']}\n")
             f.write(f"- steps: {first['steps']}\n")
             f.write(f"- repeats: {first['repeats']}\n")
+            f.write(f"- workload: {first['workload']}\n")
+            f.write(f"- skew_factor: {first['skew_factor']}\n")
             f.write(f"- pre_work: {first['pre_work']}\n")
             f.write(f"- post_work: {first['post_work']}\n")
             f.write(f"- sequential baseline avg: {seq_time}s\n\n")
@@ -148,8 +163,8 @@ def main():
         f.write("| --- | --- |\n")
         f.write("| sequential baseline | `seq` case |\n")
         f.write("| single/multi thread | `thread_1_reduce`, `thread_2_reduce`, `thread_4_reduce`, `thread_8_reduce` |\n")
-        f.write("| child process | `process_1_pipe`, `process_2_pipe`, `process_4_pipe` |\n")
-        f.write("| hybrid process + thread | `hybrid_2x2`, `hybrid_2x4`, `hybrid_4x2` |\n")
+        f.write("| child process | `process_1_pipe`, `process_2_pipe`, `process_4_pipe`, and shm variants |\n")
+        f.write("| hybrid process + thread | `hybrid_2x2`, `hybrid_2x4`, `hybrid_4x2`, `hybrid_2x4_shm` |\n")
         f.write("| synchronization comparison | `thread_4_nosync`, `thread_4_mutex`, `thread_4_reduce` |\n")
         f.write("| pipeline and merge strategy | `pipeline_final_b1000`, `pipeline_interactive_b1000` |\n")
         f.write("| batch granularity | `pipeline_interactive_b100`, `pipeline_interactive_b1000`, `pipeline_interactive_b10000` |\n\n")

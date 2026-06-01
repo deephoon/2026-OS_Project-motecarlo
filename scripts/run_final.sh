@@ -17,7 +17,7 @@ make
 
 mkdir -p "$OUT_DIR" results/raw
 
-HEADER='case_name,repeat,mode,schedule,merge,sync,processes,threads,trials,steps,batch_size,queue_size,pre_work,post_work,time_total,time_pre,time_compute,time_sync,time_merge,time_post,speedup,efficiency,sequential_fraction_estimate,compute_ratio,sync_overhead_ratio,merge_overhead_ratio,throughput_batches_per_sec,total_trials,collision_count,hist_sum,checksum,valid,notes'
+HEADER='case_name,repeat,mode,schedule,merge,sync,processes,threads,trials,steps,batch_size,queue_size,ipc,workload,skew_factor,pre_work,post_work,time_total,time_pre,time_compute,time_sync,time_ipc,time_merge,time_post,speedup,efficiency,sequential_fraction_estimate,compute_ratio,sync_overhead_ratio,ipc_overhead_ratio,merge_overhead_ratio,throughput_batches_per_sec,total_trials,collision_count,hist_sum,checksum,valid,lock_wait_count,cond_wait_count,queue_push_count,queue_pop_count,ipc_write_count,ipc_read_count,ipc_bytes,notes'
 printf '%s\n' "$HEADER" > "$RAW_OUT"
 
 run_case() {
@@ -50,6 +50,8 @@ for repeat in $(seq 1 "$REPEATS"); do
     for processes in 1 2 4; do
         run_case "process_${processes}_pipe" "$repeat" \
             --mode process --processes "$processes" --ipc pipe
+        run_case "process_${processes}_shm" "$repeat" \
+            --mode process --processes "$processes" --ipc shm
     done
 
     run_case hybrid_2x2 "$repeat" \
@@ -58,6 +60,8 @@ for repeat in $(seq 1 "$REPEATS"); do
         --mode hybrid --processes 2 --threads 4 --ipc pipe
     run_case hybrid_4x2 "$repeat" \
         --mode hybrid --processes 4 --threads 2 --ipc pipe
+    run_case hybrid_2x4_shm "$repeat" \
+        --mode hybrid --processes 2 --threads 4 --ipc shm
 
     run_case pipeline_final_b1000 "$repeat" \
         --mode pipeline --schedule queue --merge final --threads 4 --batch-size 1000 --queue-size 1024

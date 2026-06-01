@@ -15,6 +15,7 @@ typedef struct {
     const TaskBatch *batches;
     int batch_count;
     StageMetrics *metrics;
+    pthread_mutex_t *metrics_mutex;
 } PreprocessorArg;
 
 typedef struct {
@@ -32,13 +33,12 @@ typedef struct {
     MergeQueue *merge_queue;
     Result *global_result;
     StageMetrics *metrics;
+    pthread_mutex_t *metrics_mutex;
 } AggregatorArg;
 
-static void add_metric_time(StageMetrics *metrics, pthread_mutex_t *mutex,
-                            double *field, double value)
+static void increment_processed_batches(StageMetrics *metrics, pthread_mutex_t *mutex)
 {
     pthread_mutex_lock(mutex);
-    *field += value;
     metrics->processed_batches += 1;
     pthread_mutex_unlock(mutex);
 }
@@ -47,7 +47,8 @@ static void *preprocessor_thread(void *arg_ptr)
 {
     PreprocessorArg *arg = (PreprocessorArg *)arg_ptr;
     for (int i = 0; i < arg->batch_count; ++i) {
-        task_queue_push(arg->task_queue, arg->batches[i]);
+        task_queue_push(arg->task_queue, arg->batches[i], arg->metrics,
+                        arg->metrics_mutex);
     }
     task_queue_close(arg->task_queue);
     return 0;
@@ -61,34 +62,19 @@ static void *pipeline_worker(void *arg_ptr)
     while (1) {
         Result local;
         PartialResult partial;
-        double start;
-        double end;
-
-        start = now_sec();
-        if (!task_queue_pop(arg->task_queue, &batch)) {
-            end = now_sec();
-            add_metric_time(arg->metrics, arg->metrics_mutex,
-                            &arg->metrics->t_sync, elapsed_sec(start, end));
+        if (!task_queue_pop(arg->task_queue, &batch, arg->metrics,
+                            arg->metrics_mutex)) {
             break;
         }
-        end = now_sec();
-        add_metric_time(arg->metrics, arg->metrics_mutex,
-                        &arg->metrics->t_sync, elapsed_sec(start, end));
 
-        start = now_sec();
         run_batch(arg->cfg, &batch, &local);
-        end = now_sec();
-        (void)end;
+        increment_processed_batches(arg->metrics, arg->metrics_mutex);
 
         if (arg->cfg->merge_mode == MERGE_INTERACTIVE) {
             partial.batch_id = batch.batch_id;
             partial.result = local;
-            start = now_sec();
-            merge_queue_push(arg->merge_queue, partial);
-            end = now_sec();
-            pthread_mutex_lock(arg->metrics_mutex);
-            arg->metrics->t_sync += elapsed_sec(start, end);
-            pthread_mutex_unlock(arg->metrics_mutex);
+            merge_queue_push(arg->merge_queue, partial, arg->metrics,
+                             arg->metrics_mutex);
         } else {
             pthread_mutex_lock(arg->final_mutex);
             arg->final_partials[*arg->final_count] = local;
@@ -104,12 +90,15 @@ static void *aggregator_thread(void *arg_ptr)
     AggregatorArg *arg = (AggregatorArg *)arg_ptr;
     PartialResult partial;
 
-    while (merge_queue_pop(arg->merge_queue, &partial)) {
+    while (merge_queue_pop(arg->merge_queue, &partial, arg->metrics,
+                           arg->metrics_mutex)) {
         double start = now_sec();
         /* Aggregator is the only writer to global_result in interactive mode,
          * so no global result mutex is needed for this merge path. */
         result_merge(arg->global_result, &partial.result);
+        pthread_mutex_lock(arg->metrics_mutex);
         arg->metrics->t_merge += elapsed_sec(start, now_sec());
+        pthread_mutex_unlock(arg->metrics_mutex);
     }
     return 0;
 }
@@ -189,6 +178,7 @@ int run_pipeline_mode(const Config *cfg, Result *out, StageMetrics *metrics)
         aggregator_arg.merge_queue = &merge_queue;
         aggregator_arg.global_result = out;
         aggregator_arg.metrics = metrics;
+        aggregator_arg.metrics_mutex = &metrics_mutex;
         if (pthread_create(&aggregator, 0, aggregator_thread, &aggregator_arg) != 0) {
             failed = 1;
             goto cleanup;
@@ -199,6 +189,7 @@ int run_pipeline_mode(const Config *cfg, Result *out, StageMetrics *metrics)
         prep_arg.batches = batches;
         prep_arg.batch_count = batch_count;
         prep_arg.metrics = metrics;
+        prep_arg.metrics_mutex = &metrics_mutex;
         if (pthread_create(&preprocessor, 0, preprocessor_thread, &prep_arg) != 0) {
             failed = 1;
             merge_queue_close(&merge_queue);
@@ -237,6 +228,7 @@ int run_pipeline_mode(const Config *cfg, Result *out, StageMetrics *metrics)
         prep_arg.batches = batches;
         prep_arg.batch_count = batch_count;
         prep_arg.metrics = metrics;
+        prep_arg.metrics_mutex = &metrics_mutex;
         pthread_create(&preprocessor, 0, preprocessor_thread, &prep_arg);
         for (int i = 0; i < cfg->threads; ++i) {
             worker_args[i].cfg = cfg;
@@ -274,7 +266,6 @@ int run_pipeline_mode(const Config *cfg, Result *out, StageMetrics *metrics)
     postprocess_run_extra_work(cfg, out);
     end = now_sec();
     metrics->t_post = elapsed_sec(start, end);
-    metrics->processed_batches = batch_count;
     metrics->t_total_end = now_sec();
 
 cleanup:

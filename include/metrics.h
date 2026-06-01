@@ -12,9 +12,17 @@ typedef struct {
     double t_pre;
     double t_compute;
     double t_sync;
+    double t_ipc;
     double t_merge;
     double t_post;
     long processed_batches;
+    unsigned long lock_wait_count;
+    unsigned long cond_wait_count;
+    unsigned long queue_push_count;
+    unsigned long queue_pop_count;
+    unsigned long ipc_write_count;
+    unsigned long ipc_read_count;
+    unsigned long ipc_bytes;
 } StageMetrics;
 
 double now_sec(void);
@@ -23,6 +31,7 @@ void metrics_init(StageMetrics *m);
 double metrics_total(const StageMetrics *m);
 double metrics_compute_ratio(const StageMetrics *m);
 double metrics_sync_ratio(const StageMetrics *m);
+double metrics_ipc_ratio(const StageMetrics *m);
 double metrics_merge_ratio(const StageMetrics *m);
 double metrics_throughput_batches(const StageMetrics *m);
 double metrics_sequential_fraction_estimate(const StageMetrics *m);

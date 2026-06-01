@@ -24,6 +24,8 @@ typedef struct {
     double front_speed;
 } VehicleState;
 
+static volatile unsigned int workload_sink;
+
 static double clamp_nonnegative(double value)
 {
     return value < 0.0 ? 0.0 : value;
@@ -134,13 +136,53 @@ RiskLevel run_trial(unsigned int *seed, int time_steps, int *collided_out)
     return classify_risk(collided, min_ttc);
 }
 
+static int workload_difficulty_for_trial(const Config *cfg, long trial_index)
+{
+    long heavy_start;
+    if (cfg == 0 || cfg->workload_mode == WORKLOAD_UNIFORM) {
+        return 0;
+    }
+    heavy_start = cfg->trials - (cfg->trials / 4);
+    if (trial_index >= heavy_start) {
+        return cfg->skew_factor;
+    }
+    return 0;
+}
+
+static void burn_cpu_work(int difficulty, unsigned int seed)
+{
+    unsigned int x = seed;
+    int iterations = difficulty * 16;
+    for (int i = 0; i < iterations; ++i) {
+        x = x * 1664525u + 1013904223u;
+        x ^= x >> 13;
+    }
+    workload_sink = x;
+}
+
+RiskLevel run_trial_for_index(const Config *cfg, long trial_index,
+                              int *collided_out)
+{
+    unsigned int trial_seed;
+    int difficulty;
+    if (cfg == 0) {
+        if (collided_out != 0) *collided_out = 0;
+        return RISK_SAFE;
+    }
+    trial_seed = simulation_seed_for_trial(cfg->seed, trial_index);
+    difficulty = workload_difficulty_for_trial(cfg, trial_index);
+    if (difficulty > 0) {
+        burn_cpu_work(difficulty, trial_seed);
+    }
+    return run_trial(&trial_seed, cfg->time_steps, collided_out);
+}
+
 void run_batch(const Config *cfg, const TaskBatch *batch, Result *out)
 {
     result_init(out);
     for (long i = batch->start_idx; i < batch->end_idx; ++i) {
-        unsigned int trial_seed = simulation_seed_for_trial(cfg->seed, i);
         int collided = 0;
-        RiskLevel risk = run_trial(&trial_seed, cfg->time_steps, &collided);
+        RiskLevel risk = run_trial_for_index(cfg, i, &collided);
         result_add_trial(out, risk, collided);
     }
     out->checksum = result_compute_checksum(out);

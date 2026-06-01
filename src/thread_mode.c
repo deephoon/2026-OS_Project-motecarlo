@@ -17,6 +17,7 @@ typedef struct {
     Result *global_result;
     Result local_result;
     pthread_mutex_t *result_mutex;
+    StageMetrics *metrics;
 } ThreadArg;
 
 static void record_trial_result(ThreadArg *arg, RiskLevel risk, int collided)
@@ -26,10 +27,19 @@ static void record_trial_result(ThreadArg *arg, RiskLevel risk, int collided)
         result_add_trial(&arg->local_result, risk, collided);
         break;
     case SYNC_MUTEX:
+    {
+        double start = now_sec();
+        double end;
         pthread_mutex_lock(arg->result_mutex);
+        end = now_sec();
+        if (arg->metrics != 0) {
+            arg->metrics->t_sync += elapsed_sec(start, end);
+            arg->metrics->lock_wait_count += 1;
+        }
         result_add_trial(arg->global_result, risk, collided);
         pthread_mutex_unlock(arg->result_mutex);
         break;
+    }
     case SYNC_NOSYNC:
         /* Deliberately unsafe: demonstrates lost updates in shared counters. */
         result_add_trial(arg->global_result, risk, collided);
@@ -43,9 +53,8 @@ static void *thread_worker(void *arg_ptr)
     const Config *cfg = arg->cfg;
     result_init(&arg->local_result);
     for (long i = arg->start_idx; i < arg->end_idx; ++i) {
-        unsigned int trial_seed = simulation_seed_for_trial(cfg->seed, i);
         int collided = 0;
-        RiskLevel risk = run_trial(&trial_seed, cfg->time_steps, &collided);
+        RiskLevel risk = run_trial_for_index(cfg, i, &collided);
         record_trial_result(arg, risk, collided);
     }
     return 0;
@@ -104,6 +113,7 @@ int run_thread_mode_metrics(const Config *cfg, Result *out, StageMetrics *metric
         args[i].cfg = cfg;
         args[i].global_result = out;
         args[i].result_mutex = &result_mutex;
+        args[i].metrics = metrics;
         partition_work(cfg->trials, cfg->threads, i, &args[i].start_idx, &args[i].end_idx);
         if (pthread_create(&threads[i], 0, thread_worker, &args[i]) != 0) {
             fprintf(stderr, "pthread_create failed for thread %d\n", i);

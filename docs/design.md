@@ -94,17 +94,17 @@ The task queue is protected by `pthread_mutex_t`. `pthread_cond_t` is used for `
    fork child 0
    fork child 1
    ...
-   read Result from pipe
    waitpid()
+   read Result from pipe or shared memory slot
    merge child results
 
 [Child Process]
    compute assigned trial range
-   write Result to pipe
+   write Result to pipe or shared memory slot
    _exit(0)
 ```
 
-The current IPC implementation writes the `Result` struct through a pipe. This is a simple same-binary IPC model suitable for the course project. Shared memory is left as a TODO extension for comparing pipe copy overhead and shared-memory merge overhead.
+The IPC implementation supports two result-transfer paths. `--ipc pipe` writes the `Result` struct through a pipe. `--ipc shm` uses an anonymous shared-memory result table where each child writes only to its own slot and the parent reads slots after `waitpid()`. This keeps synchronization simple while still allowing pipe-vs-shared-memory IPC comparison.
 
 ## Hybrid Mode
 
@@ -117,7 +117,7 @@ The current IPC implementation writes the `Result` struct through a pipe. This i
    create pthread workers
    split child trial range
    local reduce
-   write process-local Result through pipe
+   write process-local Result through pipe or shared memory
        |
        v
 [Parent Process]
@@ -133,18 +133,18 @@ Process and thread roles are separated: processes own large simulation groups, w
 | `T_pre` | Batch generation and metadata construction |
 | `T_compute` | Main worker execution window |
 | `T_sync` | Queue wait/lock/push/pop overhead that can be measured locally |
+| `T_ipc` | Parent-side result read from pipe or shared memory |
 | `T_merge` | Result merge time |
 | `T_post` | Validation and summary calculation |
 | `T_total` | End-to-end run time |
 
-Synchronization time is not perfectly separable in a pthread program because waiting and computation can overlap. The current implementation measures observable queue synchronization sections and documents the limitation.
+Synchronization time is not perfectly separable in a pthread program because waiting and computation can overlap. The current implementation measures observable queue synchronization sections, condition-variable waits, parent waitpid time, and parent-side IPC read time, and documents the limitation.
 
 ## TODO Extensions
 
 | Extension | Purpose |
 | --- | --- |
-| Shared memory IPC | Compare pipe copy overhead with shared memory result sharing |
 | Semaphore comparison | Compare semaphore-based queue control with mutex + condition variable |
 | Double buffering | Reduce producer-consumer idle time |
 | perf stat automation | Add hardware counter evidence |
-| Work stealing | Improve load balance for uneven batch difficulty |
+| Work stealing | Improve load balance beyond the current skewed workload + queue scheduling test |

@@ -426,16 +426,16 @@ results/csv/final_results.csv
 
 최종 제출 전에는 성능 측정의 신뢰도를 높여야 한다.
 
-### TODO
+### 추가 보강 완료/남은 작업
 
 | 우선순위 | 작업 | 이유 |
 | --- | --- | --- |
-| 1 | Docker Linux에서 큰 workload 재측정 | 발표용 수치 신뢰도 확보 |
-| 2 | speedup/efficiency 후처리 | sequential baseline 기준 비교 |
-| 3 | 5회 이상 반복 측정 | 평균/최소/표준편차 필요 |
-| 4 | pidstat, `/usr/bin/time -v` 캡처 | CPU/memory 분석 보강 |
-| 5 | 그래프 생성 | 보고서 가독성 개선 |
-| 6 | shared memory IPC 여부 결정 | pipe IPC와 비교 가능 |
+| 1 | Docker Linux에서 큰 workload 재측정 | 완료. 단, 최종 보고서 전 동일 환경 재확인 권장 |
+| 2 | speedup/efficiency 후처리 | 완료. `scripts/analyze_results.py` 사용 |
+| 3 | 5회 이상 반복 측정 | 완료. `REPEATS=5` 기준 |
+| 4 | pidstat, `/usr/bin/time -v` 캡처 | 부분 완료. 최종 제출 전 캡처 이미지 정리 필요 |
+| 5 | 그래프 생성 | 완료. `scripts/make_final_graphs.py` 사용 |
+| 6 | shared memory IPC 비교 | 구현 완료. `--ipc pipe/shm` 비교 가능 |
 
 ### 발표 멘트
 
@@ -452,12 +452,11 @@ results/csv/final_results.csv
 ### 요약 문장
 
 - 기존: `seq/thread` 중심의 synchronization 비교
-- 변경: `process`, `hybrid`, `pipeline`, `interactive merge`, `pipe IPC` 추가
+- 변경: `process`, `hybrid`, `pipeline`, `interactive merge`, `pipe/shared memory IPC`, `skewed workload` 추가
 - 검증: `hist_sum`, `checksum`, `valid`로 모든 모드 정확성 확인 가능
 - 분석: stage time과 throughput으로 overhead 위치를 설명 가능
-- 남은 일: 큰 workload 반복 측정, speedup/efficiency 후처리, CPU/memory 캡처
+- 남은 일: 최종 Linux 환경에서 같은 명령으로 재측정하고 CPU/memory 캡처를 보고서에 붙이는 것
 
 ### 발표 마무리 멘트
 
 이 프로젝트의 최종 가치는 자동차 모델 자체가 아니라, 동일한 CPU-bound 작업을 여러 OS 실행 구조로 바꿔가며 정확성과 overhead를 비교할 수 있다는 점이다.
-

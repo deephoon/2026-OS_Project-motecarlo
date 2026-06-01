@@ -16,6 +16,7 @@ void cli_print_usage(FILE *out, const char *program)
             "  --merge <final|interactive>\n"
             "  --trials <int> --steps <int> --threads <int>\n"
             "  --processes <int> --batch-size <int> --queue-size <int>\n"
+            "  --workload <uniform|skewed> --skew-factor <int>\n"
             "  --pre-work <int> --post-work <int>\n"
             "  --sync <nosync|mutex|reduce> --ipc <pipe|shm>\n"
             "  --enable-pipeline <0|1> --metrics-detail <0|1>\n"
@@ -75,6 +76,8 @@ int cli_parse_args(int argc, char **argv, Config *cfg)
             if (require_value(argc, &i) != 0 || parse_sync_mode(argv[i], &cfg->sync_mode) != 0) return -1;
         } else if (strcmp(arg, "--ipc") == 0) {
             if (require_value(argc, &i) != 0 || parse_ipc_mode(argv[i], &cfg->ipc_mode) != 0) return -1;
+        } else if (strcmp(arg, "--workload") == 0) {
+            if (require_value(argc, &i) != 0 || parse_workload_mode(argv[i], &cfg->workload_mode) != 0) return -1;
         } else if (strcmp(arg, "--trials") == 0) {
             if (require_value(argc, &i) != 0 || parse_long_arg(argv[i], 1, LONG_MAX, &cfg->trials) != 0) return -1;
         } else if (strcmp(arg, "--steps") == 0) {
@@ -87,6 +90,8 @@ int cli_parse_args(int argc, char **argv, Config *cfg)
             if (parse_int_option(argc, argv, &i, 1, INT_MAX, &cfg->batch_size) != 0) return -1;
         } else if (strcmp(arg, "--queue-size") == 0) {
             if (parse_int_option(argc, argv, &i, 1, INT_MAX, &cfg->queue_size) != 0) return -1;
+        } else if (strcmp(arg, "--skew-factor") == 0) {
+            if (parse_int_option(argc, argv, &i, 1, INT_MAX, &cfg->skew_factor) != 0) return -1;
         } else if (strcmp(arg, "--pre-work") == 0) {
             if (parse_int_option(argc, argv, &i, 0, INT_MAX, &cfg->pre_work) != 0) return -1;
         } else if (strcmp(arg, "--post-work") == 0) {

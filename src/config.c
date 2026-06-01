@@ -10,12 +10,14 @@ void config_set_defaults(Config *cfg)
     cfg->schedule_mode = SCHEDULE_STATIC;
     cfg->merge_mode = MERGE_FINAL;
     cfg->ipc_mode = IPC_PIPE;
+    cfg->workload_mode = WORKLOAD_UNIFORM;
     cfg->trials = 100000;
     cfg->time_steps = 50;
     cfg->threads = 4;
     cfg->processes = 2;
     cfg->batch_size = 1000;
     cfg->queue_size = 1024;
+    cfg->skew_factor = 8;
     cfg->pre_work = 0;
     cfg->post_work = 0;
     cfg->enable_pipeline = 1;
@@ -44,9 +46,13 @@ int config_validate(const Config *cfg)
     if (cfg->ipc_mode < IPC_PIPE || cfg->ipc_mode > IPC_SHM) {
         return 0;
     }
+    if (cfg->workload_mode < WORKLOAD_UNIFORM ||
+        cfg->workload_mode > WORKLOAD_SKEWED) {
+        return 0;
+    }
     if (cfg->trials <= 0 || cfg->time_steps <= 0 || cfg->threads <= 0 ||
         cfg->processes <= 0 || cfg->batch_size <= 0 || cfg->queue_size <= 0 ||
-        cfg->pre_work < 0 || cfg->post_work < 0) {
+        cfg->skew_factor <= 0 || cfg->pre_work < 0 || cfg->post_work < 0) {
         return 0;
     }
     return 1;

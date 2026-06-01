@@ -11,21 +11,22 @@
 - final reduce and interactive merge
 - fork-based process mode
 - pipe-based IPC result transfer
+- shared-memory IPC result transfer
 - hybrid process + thread mode
 - post-processing validation
-- stage-level CSV output
+- stage-level CSV output with `time_ipc` and queue wait counters
+- skewed workload option for load-imbalance experiments
 - Docker Linux execution environment
 
 ## Remaining Work
 
 | Item | Status | Plan |
 | --- | --- | --- |
-| Shared memory IPC | TODO | Add `shm_open` or `mmap` based result region |
 | Semaphore queue comparison | TODO | Optional comparison only; current core uses mutex + condvar |
 | CPU utilization automation | Partial | Use manual `pidstat`; script automation can be added |
 | Memory analysis | Partial | Use `/usr/bin/time -v`, `pidstat -r`, or `/proc` |
-| Graph generation | TODO | Can be added with Python or spreadsheet from CSV |
-| Dynamic difficulty load balance | Skeleton-level | `TaskBatch.difficulty_level` exists as metadata |
+| Graph generation | Done | `scripts/make_final_graphs.py` generates SVG graphs from analyzed CSV |
+| Dynamic difficulty load balance | Implemented | `--workload skewed --skew-factor N` adds deterministic dummy CPU work without changing checksum |
 
 ## Presentation Message
 

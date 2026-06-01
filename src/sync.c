@@ -51,6 +51,15 @@ const char *ipc_mode_to_string(IpcMode mode)
     }
 }
 
+const char *workload_mode_to_string(WorkloadMode mode)
+{
+    switch (mode) {
+    case WORKLOAD_UNIFORM: return "uniform";
+    case WORKLOAD_SKEWED: return "skewed";
+    default: return "unknown";
+    }
+}
+
 int parse_run_mode(const char *text, RunMode *out)
 {
     if (text == 0 || out == 0) return -1;
@@ -96,6 +105,15 @@ int parse_ipc_mode(const char *text, IpcMode *out)
     if (text == 0 || out == 0) return -1;
     if (strcmp(text, "pipe") == 0) *out = IPC_PIPE;
     else if (strcmp(text, "shm") == 0) *out = IPC_SHM;
+    else return -1;
+    return 0;
+}
+
+int parse_workload_mode(const char *text, WorkloadMode *out)
+{
+    if (text == 0 || out == 0) return -1;
+    if (strcmp(text, "uniform") == 0) *out = WORKLOAD_UNIFORM;
+    else if (strcmp(text, "skewed") == 0) *out = WORKLOAD_SKEWED;
     else return -1;
     return 0;
 }

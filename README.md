@@ -8,7 +8,7 @@
 
 핵심 키워드:
 
-`pthread` · `fork()` · `pipe IPC` · `mutex` · `condition variable` · `task queue` · `pipeline` · `local reduce` · `interactive merge` · `Amdahl's Law` · `checksum validation`
+`pthread` · `fork()` · `pipe IPC` · `shared memory IPC` · `mutex` · `condition variable` · `task queue` · `pipeline` · `local reduce` · `interactive merge` · `skewed workload` · `Amdahl's Law` · `checksum validation`
 
 ---
 
@@ -25,8 +25,8 @@
 | 작업 분배 | static partition | static partition + bounded task queue |
 | 동기화 | `nosync`, `mutex`, `reduce` | queue/merge synchronization까지 확장 |
 | 병합 방식 | final reduce 중심 | final reduce + interactive merge |
-| IPC | 없음 | pipe 기반 child result 전달 |
-| 성능 지표 | 실행시간 중심 | stage time, throughput, validation CSV |
+| IPC | 없음 | pipe + shared memory 기반 child result 전달 |
+| 성능 지표 | 실행시간 중심 | stage time, IPC time, queue wait counters, throughput, validation CSV |
 
 ---
 
@@ -44,6 +44,7 @@
 | 발표용 그래프 생성 | thread scaling, sync 비교, process/hybrid, pipeline merge, stage time, Amdahl stress 그래프 생성 | `results/graphs/*.svg` |
 | 재현성 가이드 | Docker, Windows WSL2 Ubuntu, 일반 Linux 실행 방법 정리 | `docs/reproducible_linux_experiment_guide.md` |
 | 최종 검증 리포트 | 기능 검증, 기본 성능, Amdahl stress, CPU/memory, 그래프 목록, 보고서 문장 정리 | `docs/final_validation_report.md` |
+| 코드 설득력 추가 보강 | `time_ipc`, queue wait counters, `--workload skewed`, `--ipc shm` 실제 구현 추가 | `src/*`, `include/*`, `scripts/*` |
 
 핵심 보강 결과:
 
@@ -65,6 +66,23 @@ Amdahl stress 실험:
 - 최종 성능 순위는 단일 실행이 아니라 `final_analyzed.csv`의 5회 반복 평균 기준으로 해석합니다.
 - `nosync`는 빠르게 보일 수 있지만 `valid=0`, checksum mismatch이므로 race condition 실패 사례로 사용합니다.
 
+추가 구현 보강 후 현재 CLI는 다음 항목까지 직접 실험할 수 있습니다.
+
+```sh
+./sim --mode process --processes 4 --ipc pipe --trials 1000000 --steps 50
+./sim --mode process --processes 4 --ipc shm  --trials 1000000 --steps 50
+
+./sim --mode thread --threads 4 --schedule static \
+  --workload skewed --skew-factor 8 --trials 1000000 --steps 50
+
+./sim --mode pipeline --threads 4 --schedule queue --merge interactive \
+  --workload skewed --skew-factor 8 \
+  --batch-size 1000 --queue-size 1024 \
+  --trials 1000000 --steps 50
+```
+
+이 보강의 목적은 “새 기능을 많이 넣었다”가 아니라, 교수님 피드백에 맞춰 **동기화 비용, IPC 비용, workload imbalance, queue scheduling 필요성**을 실험으로 방어할 수 있게 만드는 것입니다.
+
 ---
 
 ## 📌 프로젝트 가이드 요구사항 대응
@@ -74,7 +92,7 @@ Amdahl stress 실험:
 | 가이드 요구사항 | 현재 구현/문서 대응 |
 | --- | --- |
 | 4개 이상 core 활용 가능 시스템 | thread 수 `1/2/4/8`, process 수 `2/4`, hybrid 조합 실험 가능 |
-| child process 사용 | `--mode process`, `fork()`, `waitpid()`, pipe IPC 구현 |
+| child process 사용 | `--mode process`, `fork()`, `waitpid()`, pipe/shared memory IPC 구현 |
 | multiple threads 사용 | `--mode thread`, `--mode pipeline`, `--mode hybrid`에서 pthread 사용 |
 | synchronization 문제 정의 및 해결 | `nosync` race condition, `mutex`, `reduce`, queue mutex/condvar 비교 |
 | parent sequential vs child process 비교 | `--mode seq`와 `--mode process` 결과 비교 |
@@ -82,9 +100,10 @@ Amdahl stress 실험:
 | process와 thread 역할 구분 | process는 큰 simulation group, thread는 내부 batch 계산 담당 |
 | synchronization 사용/미사용 비교 | `nosync` vs `mutex` vs `reduce` |
 | 다양한 test vector | trials, steps, threads, processes, batch size, merge mode 변경 가능 |
-| 정량적 성능 분석 | `time_total`, `T_pre`, `T_compute`, `T_sync`, `T_merge`, `T_post`, throughput, speedup, efficiency 후처리 |
+| 정량적 성능 분석 | `time_total`, `T_pre`, `T_compute`, `T_sync`, `T_ipc`, `T_merge`, `T_post`, queue wait counters, throughput, speedup, efficiency 후처리 |
 | 문제 인식과 해결 과정 | 단순 병렬화 한계 → pre/post stage → queue/pipeline/interactive merge 도입 |
 | CPU/memory 측정 | Docker Linux, `pidstat`, `/usr/bin/time -v` 사용 계획 정리 |
+| workload imbalance 분석 | `--workload uniform/skewed`, `--skew-factor`로 static partition과 queue scheduling 비교 가능 |
 | AI agent 사용 기록 | OpenAI Codex를 코드/문서 정리에 사용. 최종 보고서에 사용 범위와 prompt 별도 기재 필요 |
 
 ---
@@ -115,6 +134,7 @@ Amdahl stress 실험:
 src/process_mode.c
 src/hybrid_mode.c
 src/ipc_pipe.c
+src/ipc_shm.c
 ```
 
 사용 OS 개념:
@@ -125,7 +145,8 @@ src/ipc_pipe.c
 | process address space | child는 parent와 독립된 메모리 공간에서 계산 |
 | `waitpid()` | parent가 child 종료를 기다림 |
 | process isolation | child가 계산한 결과는 parent 메모리에 바로 반영되지 않음 |
-| IPC | child result를 parent에게 전달하기 위해 pipe 사용 |
+| pipe IPC | child result를 parent에게 byte stream으로 전달 |
+| shared memory IPC | child가 자기 result slot에 쓰고 parent가 `waitpid()` 후 읽음 |
 
 개념적으로 process mode는 다음처럼 동작합니다.
 
@@ -136,14 +157,24 @@ Parent process
   └─ fork child N  -> 자기 trial range 계산 -> pipe write
 
 Parent process
-  -> pipe read
   -> waitpid
+  -> pipe read 또는 shared memory slot read
   -> result merge
   -> checksum validation
 ```
 
 이 구조를 통해 확인하려는 것은 단순히 “process가 빠른가?”가 아닙니다.  
-process는 thread보다 메모리 격리성이 좋지만, `fork()`와 IPC 비용이 존재합니다. 따라서 작은 workload에서는 손해를 볼 수 있고, 큰 workload에서는 병렬 계산 이득이 overhead를 이길 수 있습니다.
+process는 thread보다 메모리 격리성이 좋지만, `fork()`, `waitpid()`, IPC 비용이 존재합니다. 따라서 작은 workload에서는 손해를 볼 수 있고, 큰 workload에서는 병렬 계산 이득이 overhead를 이길 수 있습니다.
+
+현재 구현은 `--ipc pipe`와 `--ipc shm`을 모두 지원합니다.
+
+| IPC 방식 | 구현 방식 | 해석 포인트 |
+| --- | --- | --- |
+| `pipe` | child가 `Result` 구조체를 pipe로 write, parent가 read | 명시적인 parent-child 메시지 전달, read/write 비용 관찰 |
+| `shm` | `mmap(MAP_SHARED)` result slot을 process 수만큼 만들고 child가 자기 slot에 write | 복사 비용은 줄일 수 있지만 접근 순서와 동기화 설계 설명 필요 |
+
+shared memory mode에서는 child마다 독립 slot을 사용하고 parent가 `waitpid()` 이후 읽습니다.
+따라서 이 프로젝트 범위에서는 별도 lock 없이도 write/read 충돌을 피할 수 있습니다.
 
 ### 2. Thread
 
@@ -264,27 +295,43 @@ worker:
 
 ```text
 src/ipc_pipe.c
+src/ipc_shm.c
 src/process_mode.c
 src/hybrid_mode.c
 ```
 
 process는 서로 메모리를 공유하지 않습니다.  
-따라서 child process가 계산한 `Result`는 parent가 직접 볼 수 없습니다. 이 프로젝트는 pipe를 사용해 child result를 parent에게 전달합니다.
+따라서 child process가 계산한 `Result`는 parent가 직접 볼 수 없습니다. 이 프로젝트는 두 가지 IPC 방식을 비교할 수 있게 했습니다.
 
 ```text
-Child process
+pipe mode:
+  Child process
   -> local Result 계산
   -> pipe write
   -> exit
 
-Parent process
+  Parent process
+  -> waitpid
   -> pipe read
   -> result merge
+
+shared memory mode:
+  Parent process
+  -> shared result table 생성
+  -> fork
+
+  Child process
+  -> 자기 slot에 local Result write
+  -> exit
+
+  Parent process
   -> waitpid
+  -> child slot read
+  -> result merge
 ```
 
-이때 pipe read/write와 waitpid 대기 시간이 `T_sync` 또는 merge 관련 overhead로 관찰됩니다.  
-따라서 process mode는 계산 성능뿐 아니라 IPC 비용까지 함께 분석할 수 있습니다.
+이때 `waitpid()` 대기는 `T_sync`, parent가 결과를 읽는 구간은 `T_ipc`, partial result를 합치는 구간은 `T_merge`로 분리해 관찰합니다.
+따라서 process mode는 계산 성능뿐 아니라 IPC 방식 차이까지 함께 분석할 수 있습니다.
 
 ### 6. Scheduling / Work Distribution
 
@@ -329,6 +376,27 @@ worker 2 -> pop batch
 ```
 
 이 차이를 통해 단순 partition과 producer-consumer queue 구조의 trade-off를 비교할 수 있습니다.
+
+추가로 workload imbalance를 일부러 만들 수 있는 옵션을 넣었습니다.
+
+```sh
+--workload uniform
+--workload skewed
+--skew-factor 8
+```
+
+`uniform`은 모든 trial의 계산량이 거의 같습니다. 이 조건에서는 static partition이 단순하고 빠를 수 있습니다.
+`skewed`는 뒤쪽 25% trial에 dummy CPU work를 추가합니다. 중요한 점은 **위험도 결과 반영은 trial당 한 번만 수행**한다는 것입니다. 따라서 `hist_sum == trials`, checksum 검증은 유지하면서도 일부 구간의 계산량만 늘릴 수 있습니다.
+
+이 옵션으로 다음 비교가 가능해졌습니다.
+
+| 비교 | 의미 |
+| --- | --- |
+| `uniform + static` | 균등 workload에서는 static partition overhead가 작음 |
+| `skewed + static` | 특정 worker에 heavy range가 몰리면 load imbalance 발생 |
+| `skewed + queue` | worker가 batch를 동적으로 가져가므로 imbalance 완화 가능 |
+
+보고서에서는 이 결과를 “pipeline이 항상 빠르다”가 아니라, **불균등 workload에서 queue scheduling이 왜 필요한지**를 보여주는 실험으로 해석하는 것이 안전합니다.
 
 ### 7. Pipeline
 
@@ -377,7 +445,7 @@ scripts/analyze_results.py
 이 프로젝트는 전체 시간을 stage별로 나눠 측정합니다.
 
 ```text
-T_total = T_pre + T_compute + T_sync + T_merge + T_post
+T_total = T_pre + T_compute + T_sync + T_ipc + T_merge + T_post
 ```
 
 각 항목의 의미:
@@ -386,7 +454,8 @@ T_total = T_pre + T_compute + T_sync + T_merge + T_post
 | --- | --- |
 | `T_pre` | 병렬 계산 전 준비 단계. 순차 구간으로 작용 가능 |
 | `T_compute` | 병렬화 가능한 핵심 계산 |
-| `T_sync` | lock, condition wait, IPC wait, join/wait overhead |
+| `T_sync` | lock, condition wait, join/waitpid overhead |
+| `T_ipc` | parent가 pipe/shared memory 결과를 읽는 IPC 구간 |
 | `T_merge` | partial result를 하나로 합치는 구간 |
 | `T_post` | validation/checksum 등 후처리 |
 
@@ -395,8 +464,11 @@ Amdahl's Law에 따르면 병렬화할 수 없는 구간이 전체 speedup의 �
 
 ```text
 sequential_fraction_estimate
-  = (T_pre + T_sync + T_merge + T_post) / T_total
+  = (T_pre + T_sync + T_ipc + T_merge + T_post) / T_total
 ```
+
+주의할 점도 있습니다. pipeline의 `T_sync`는 여러 worker의 lock/condition wait를 누적한 값이므로 wall-clock stage와 1:1로 더하면 `T_total`보다 커질 수 있습니다.
+이 값은 “동기화 대기 비용이 어디에서 발생했는가”를 보여주는 overhead 지표로 해석해야 합니다.
 
 결론적으로 이 프로젝트는 단순 계산 프로그램이 아니라, **OS 실행 단위와 synchronization 비용이 전체 성능에 미치는 영향을 관찰하는 실험 장치**입니다.
 
@@ -436,6 +508,8 @@ Pre-processing
 | process와 thread 역할 차이가 약함 | process는 큰 작업 단위, thread는 내부 계산 병렬화로 분리 |
 | 성능 저하 원인을 설명하기 어려움 | stage time과 throughput 지표 추가 |
 | Amdahl's Law가 잘 드러나지 않음 | `--pre-work`, `--post-work`로 순차 stage 부하를 조절 가능하게 추가 |
+| static partition이 너무 잘 작동함 | `--workload skewed`로 load imbalance 시나리오 추가 |
+| pipe IPC만 있으면 IPC 비교가 약함 | `--ipc shm` shared memory mode 추가 |
 
 이 변경 덕분에 단순히 “빠르다/느리다”가 아니라, **어느 stage에서 overhead가 생기는지** 설명할 수 있게 됐습니다.
 
@@ -449,6 +523,7 @@ Pre-processing
 ./sim --mode pipeline --threads 4 --trials 1000000 --steps 50 \
   --schedule queue --merge interactive \
   --batch-size 1000 --queue-size 1024 \
+  --workload uniform --skew-factor 8 \
   --pre-work 50000 --post-work 10000 \
   --metrics-detail 1 --seed 42
 ```
@@ -598,17 +673,17 @@ parent process
 
 child process
   -> 자기 trial range 계산
-  -> pipe로 Result 전송
+  -> pipe write 또는 shared memory slot write
   -> exit
 
 parent process
-  -> pipe read
   -> waitpid
+  -> pipe read 또는 shm slot read
   -> merge
 ```
 
 `process` mode에서는 child process가 독립된 address space에서 계산합니다.  
-따라서 결과 공유를 위해 pipe IPC가 필요합니다.
+따라서 결과 공유를 위해 pipe 또는 shared memory IPC가 필요합니다.
 
 #### `hybrid`
 
@@ -619,7 +694,7 @@ parent process
 각 child process
   -> 내부에서 pthread worker 생성
   -> child-local reduce 수행
-  -> pipe로 parent에게 결과 전송
+  -> pipe 또는 shared memory로 parent에게 결과 전송
 
 parent process
   -> child result merge
@@ -740,9 +815,11 @@ scripts/analyze_results.py
 
 ```text
 mode,schedule,merge,sync,processes,threads,trials,steps,
-time_total,time_pre,time_compute,time_sync,time_merge,time_post,
+batch_size,queue_size,ipc,workload,skew_factor,
+time_total,time_pre,time_compute,time_sync,time_ipc,time_merge,time_post,
 sequential_fraction_estimate,compute_ratio,
-total_trials,collision_count,hist_sum,checksum,valid
+total_trials,collision_count,hist_sum,checksum,valid,
+lock_wait_count,cond_wait_count,queue_push_count,queue_pop_count,ipc_bytes
 ```
 
 단일 실행만으로는 speedup baseline을 알 수 없으므로, 최종 speedup/efficiency는 `scripts/analyze_results.py`가 계산합니다.
@@ -822,6 +899,7 @@ CSV Metrics
 | `T_pre` | batch 생성, metadata 구성 | 일부 순차 구간 |
 | `T_compute` | Monte Carlo trial 계산 | 핵심 병렬 구간 |
 | `T_sync` | queue wait, lock, condition wait | synchronization overhead |
+| `T_ipc` | pipe/shared memory result read | IPC overhead |
 | `T_merge` | partial result 병합 | 병합 전략에 따라 병목 가능 |
 | `T_post` | validation, checksum | 일부 순차 구간 |
 | `T_total` | 전체 실행 시간 | 최종 비교 기준 |
@@ -896,19 +974,20 @@ trial_seed = base_seed ^ (trial_index * 2654435761u)
 작업을 batch로 나누고 queue에 넣습니다. worker thread가 queue에서 batch를 꺼내 계산합니다.  
 이 모드는 producer-consumer 구조, mutex/condition variable, merge queue overhead를 보여주는 핵심 확장입니다.
 
-### 4. `process`: fork + pipe IPC
+### 4. `process`: fork + pipe/shared memory IPC
 
 ```sh
 ./sim --mode process --processes 2 --trials 10000 --steps 30 --ipc pipe --seed 42
+./sim --mode process --processes 2 --trials 10000 --steps 30 --ipc shm  --seed 42
 ```
 
-parent가 child process를 만들고, child가 계산한 `Result`를 pipe로 전달합니다.
+parent가 child process를 만들고, child가 계산한 `Result`를 pipe 또는 shared memory로 전달합니다.
 
 ```text
 Parent
   -> fork child
-  -> pipe read
   -> waitpid
+  -> pipe read 또는 shm slot read
   -> result merge
 ```
 
@@ -926,7 +1005,7 @@ process와 thread의 역할을 분리합니다.
 | Parent process | child 생성, pipe 수신, 최종 merge |
 | Child process | 큰 simulation group 담당 |
 | Thread worker | child 내부 trial range 병렬 계산 |
-| Pipe IPC | child result를 parent로 전달 |
+| Pipe/Shm IPC | child result를 parent로 전달 |
 
 ---
 
@@ -1006,7 +1085,7 @@ worker가 batch 계산 완료
 
 ```text
 sequential_fraction_estimate
-  = (T_pre + T_sync + T_merge + T_post) / T_total
+  = (T_pre + T_sync + T_ipc + T_merge + T_post) / T_total
 
 speedup
   = T_seq / T_parallel
@@ -1364,8 +1443,10 @@ pidstat -u -r -C sim 1
 │   ├── sequential.c         # sequential baseline
 │   ├── thread_mode.c        # pthread static mode
 │   ├── pipeline_mode.c      # queue 기반 pipeline
-│   ├── process_mode.c       # fork + pipe IPC
+│   ├── process_mode.c       # fork + pipe/shm IPC
 │   ├── hybrid_mode.c        # process 내부 pthread
+│   ├── ipc_pipe.c           # pipe result transfer
+│   ├── ipc_shm.c            # shared memory result table
 │   ├── task_queue.c         # bounded task queue
 │   ├── merge_queue.c        # partial result queue
 │   ├── preprocess.c         # TaskBatch 생성
@@ -1425,7 +1506,7 @@ pidstat -u -r -C sim 1
 | 3 | 5회 이상 반복 측정 summary 검토 | 평균/최소/표준편차 해석 필요 |
 | 4 | CPU/memory 캡처 | `pidstat`, `/usr/bin/time -v` 근거 확보 |
 | 5 | 그래프 생성 | 보고서 가독성 향상 |
-| 6 | shared memory IPC | pipe IPC와 비교 가능 |
+| 6 | skewed workload 최종 반복 실험 | static partition과 queue scheduling 차이 검증 |
 | 7 | semaphore queue 비교 | mutex + condvar와 overhead 비교 가능 |
 
 ---
@@ -1437,6 +1518,6 @@ pidstat -u -r -C sim 1
 | `Permission denied` | `chmod +x scripts/run_final.sh scripts/analyze_results.py` |
 | `make: command not found` | `apt-get install -y build-essential make` |
 | `nosync`가 invalid | 정상입니다. race condition 관찰용 모드입니다. |
-| `--ipc shm` 실패 | shared memory IPC는 TODO입니다. 현재 기본은 `--ipc pipe`입니다. |
+| `--ipc shm` 실패 | macOS/Linux feature macro 또는 Docker Linux 환경을 확인합니다. 현재 코드는 `mmap(MAP_SHARED)` 기반입니다. |
 | 8 threads가 더 느림 | core 수 한계, scheduling/context switching overhead를 확인해야 합니다. |
 | macOS와 Docker 결과 차이 | 최종 수치는 Docker Linux 기준으로 통일하는 것이 좋습니다. |

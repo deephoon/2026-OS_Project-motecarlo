@@ -98,6 +98,7 @@ def stacked_stage_chart(path, title, subtitle, labels, rows):
         ("pre", "avg_time_pre", COLORS["purple"]),
         ("compute", "avg_time_compute", COLORS["blue"]),
         ("sync", "avg_time_sync", COLORS["orange"]),
+        ("ipc", "avg_time_ipc", COLORS["gray"]),
         ("merge", "avg_time_merge", COLORS["green"]),
         ("post", "avg_time_post", COLORS["red"]),
     ]

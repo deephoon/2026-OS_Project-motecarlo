@@ -2,6 +2,7 @@
 #define MERGE_QUEUE_H
 
 #include "result.h"
+#include "metrics.h"
 
 #include <pthread.h>
 
@@ -24,8 +25,10 @@ typedef struct {
 
 int merge_queue_init(MergeQueue *q, int capacity);
 void merge_queue_destroy(MergeQueue *q);
-int merge_queue_push(MergeQueue *q, PartialResult item);
-int merge_queue_pop(MergeQueue *q, PartialResult *out);
+int merge_queue_push(MergeQueue *q, PartialResult item, StageMetrics *metrics,
+                     pthread_mutex_t *metrics_mutex);
+int merge_queue_pop(MergeQueue *q, PartialResult *out, StageMetrics *metrics,
+                    pthread_mutex_t *metrics_mutex);
 void merge_queue_close(MergeQueue *q);
 
 #endif

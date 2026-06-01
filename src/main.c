@@ -14,11 +14,13 @@
 static void print_final_header(void)
 {
     puts("mode,schedule,merge,sync,processes,threads,trials,steps,batch_size,"
-         "queue_size,pre_work,post_work,time_total,time_pre,time_compute,time_sync,time_merge,"
+         "queue_size,ipc,workload,skew_factor,pre_work,post_work,"
+         "time_total,time_pre,time_compute,time_sync,time_ipc,time_merge,"
          "time_post,speedup,efficiency,sequential_fraction_estimate,"
-         "compute_ratio,sync_overhead_ratio,merge_overhead_ratio,"
+         "compute_ratio,sync_overhead_ratio,ipc_overhead_ratio,merge_overhead_ratio,"
          "throughput_batches_per_sec,total_trials,collision_count,hist_sum,"
-         "checksum,valid,notes");
+         "checksum,valid,lock_wait_count,cond_wait_count,queue_push_count,"
+         "queue_pop_count,ipc_write_count,ipc_read_count,ipc_bytes,notes");
 }
 
 static void print_final_row(const Config *cfg, const StageMetrics *m,
@@ -32,8 +34,10 @@ static void print_final_row(const Config *cfg, const StageMetrics *m,
                   cfg->threads;
     (void)speedup;
     (void)efficiency;
-    printf("%s,%s,%s,%s,%d,%d,%ld,%d,%d,%d,%d,%d,%.6f,%.6f,%.6f,%.6f,%.6f,"
-           "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%ld,%ld,%ld,%lu,%d,%s\n",
+    printf("%s,%s,%s,%s,%d,%d,%ld,%d,%d,%d,%s,%s,%d,%d,%d,"
+           "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,"
+           "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%ld,%ld,%ld,%lu,%d,"
+           "%lu,%lu,%lu,%lu,%lu,%lu,%lu,%s\n",
            run_mode_to_string(cfg->mode),
            schedule_mode_to_string(cfg->schedule_mode),
            merge_mode_to_string(cfg->merge_mode),
@@ -44,12 +48,16 @@ static void print_final_row(const Config *cfg, const StageMetrics *m,
            cfg->time_steps,
            cfg->batch_size,
            cfg->queue_size,
+           ipc_mode_to_string(cfg->ipc_mode),
+           workload_mode_to_string(cfg->workload_mode),
+           cfg->skew_factor,
            cfg->pre_work,
            cfg->post_work,
            total,
            m->t_pre,
            m->t_compute,
            m->t_sync,
+           m->t_ipc,
            m->t_merge,
            m->t_post,
            speedup,
@@ -57,6 +65,7 @@ static void print_final_row(const Config *cfg, const StageMetrics *m,
            metrics_sequential_fraction_estimate(m),
            metrics_compute_ratio(m),
            metrics_sync_ratio(m),
+           metrics_ipc_ratio(m),
            metrics_merge_ratio(m),
            metrics_throughput_batches(m),
            r->total_trials,
@@ -64,20 +73,29 @@ static void print_final_row(const Config *cfg, const StageMetrics *m,
            result_hist_sum(r),
            r->checksum,
            valid,
+           m->lock_wait_count,
+           m->cond_wait_count,
+           m->queue_push_count,
+           m->queue_pop_count,
+           m->ipc_write_count,
+           m->ipc_read_count,
+           m->ipc_bytes,
            notes);
 }
 
 static void print_verbose_summary(const Config *cfg, const Result *r,
                                   const StageMetrics *m, int valid)
 {
-    fprintf(stderr, "mode=%s schedule=%s merge=%s sync=%s\n",
+    fprintf(stderr, "mode=%s schedule=%s merge=%s sync=%s ipc=%s workload=%s\n",
             run_mode_to_string(cfg->mode),
             schedule_mode_to_string(cfg->schedule_mode),
             merge_mode_to_string(cfg->merge_mode),
-            sync_mode_to_string(cfg->sync_mode));
-    fprintf(stderr, "total=%.6f pre=%.6f compute=%.6f sync=%.6f merge=%.6f post=%.6f\n",
+            sync_mode_to_string(cfg->sync_mode),
+            ipc_mode_to_string(cfg->ipc_mode),
+            workload_mode_to_string(cfg->workload_mode));
+    fprintf(stderr, "total=%.6f pre=%.6f compute=%.6f sync=%.6f ipc=%.6f merge=%.6f post=%.6f\n",
             metrics_total(m), m->t_pre, m->t_compute, m->t_sync,
-            m->t_merge, m->t_post);
+            m->t_ipc, m->t_merge, m->t_post);
     fprintf(stderr, "trials=%ld hist_sum=%ld collisions=%ld checksum=%lu valid=%d\n",
             r->total_trials, result_hist_sum(r), r->collision_count,
             r->checksum, valid);
@@ -115,11 +133,9 @@ int main(int argc, char **argv)
         break;
     case MODE_PROCESS:
         rc = run_process_mode(&cfg, &result, &metrics);
-        if (cfg.ipc_mode == IPC_SHM) notes = "shm_todo";
         break;
     case MODE_HYBRID:
         rc = run_hybrid_mode(&cfg, &result, &metrics);
-        if (cfg.ipc_mode == IPC_SHM) notes = "shm_todo";
         break;
     }
 

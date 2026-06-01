@@ -2,6 +2,22 @@
 
 #include <stdlib.h>
 
+static void add_sync_metric(StageMetrics *metrics, pthread_mutex_t *mutex,
+                            double dt, unsigned long lock_waits,
+                            unsigned long cond_waits,
+                            unsigned long pushes,
+                            unsigned long pops)
+{
+    if (metrics == 0) return;
+    if (mutex != 0) pthread_mutex_lock(mutex);
+    metrics->t_sync += dt;
+    metrics->lock_wait_count += lock_waits;
+    metrics->cond_wait_count += cond_waits;
+    metrics->queue_push_count += pushes;
+    metrics->queue_pop_count += pops;
+    if (mutex != 0) pthread_mutex_unlock(mutex);
+}
+
 int merge_queue_init(MergeQueue *q, int capacity)
 {
     if (q == 0 || capacity <= 0) {
@@ -36,12 +52,21 @@ void merge_queue_destroy(MergeQueue *q)
     q->buffer = 0;
 }
 
-int merge_queue_push(MergeQueue *q, PartialResult item)
+int merge_queue_push(MergeQueue *q, PartialResult item, StageMetrics *metrics,
+                     pthread_mutex_t *metrics_mutex)
 {
+    double start;
+    double end;
     if (q == 0) return 0;
+    start = now_sec();
     pthread_mutex_lock(&q->mutex);
+    end = now_sec();
+    add_sync_metric(metrics, metrics_mutex, elapsed_sec(start, end), 1, 0, 0, 0);
     while (!q->closed && q->count == q->capacity) {
+        start = now_sec();
         pthread_cond_wait(&q->not_full, &q->mutex);
+        end = now_sec();
+        add_sync_metric(metrics, metrics_mutex, elapsed_sec(start, end), 0, 1, 0, 0);
     }
     if (q->closed) {
         pthread_mutex_unlock(&q->mutex);
@@ -50,17 +75,27 @@ int merge_queue_push(MergeQueue *q, PartialResult item)
     q->buffer[q->tail] = item;
     q->tail = (q->tail + 1) % q->capacity;
     q->count += 1;
+    add_sync_metric(metrics, metrics_mutex, 0.0, 0, 0, 1, 0);
     pthread_cond_signal(&q->not_empty);
     pthread_mutex_unlock(&q->mutex);
     return 1;
 }
 
-int merge_queue_pop(MergeQueue *q, PartialResult *out)
+int merge_queue_pop(MergeQueue *q, PartialResult *out, StageMetrics *metrics,
+                    pthread_mutex_t *metrics_mutex)
 {
+    double start;
+    double end;
     if (q == 0 || out == 0) return 0;
+    start = now_sec();
     pthread_mutex_lock(&q->mutex);
+    end = now_sec();
+    add_sync_metric(metrics, metrics_mutex, elapsed_sec(start, end), 1, 0, 0, 0);
     while (!q->closed && q->count == 0) {
+        start = now_sec();
         pthread_cond_wait(&q->not_empty, &q->mutex);
+        end = now_sec();
+        add_sync_metric(metrics, metrics_mutex, elapsed_sec(start, end), 0, 1, 0, 0);
     }
     if (q->count == 0 && q->closed) {
         pthread_mutex_unlock(&q->mutex);
@@ -69,6 +104,7 @@ int merge_queue_pop(MergeQueue *q, PartialResult *out)
     *out = q->buffer[q->head];
     q->head = (q->head + 1) % q->capacity;
     q->count -= 1;
+    add_sync_metric(metrics, metrics_mutex, 0.0, 0, 0, 0, 1);
     pthread_cond_signal(&q->not_full);
     pthread_mutex_unlock(&q->mutex);
     return 1;

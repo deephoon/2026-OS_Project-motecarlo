@@ -28,9 +28,17 @@ void metrics_init(StageMetrics *m)
     m->t_pre = 0.0;
     m->t_compute = 0.0;
     m->t_sync = 0.0;
+    m->t_ipc = 0.0;
     m->t_merge = 0.0;
     m->t_post = 0.0;
     m->processed_batches = 0;
+    m->lock_wait_count = 0;
+    m->cond_wait_count = 0;
+    m->queue_push_count = 0;
+    m->queue_pop_count = 0;
+    m->ipc_write_count = 0;
+    m->ipc_read_count = 0;
+    m->ipc_bytes = 0;
 }
 
 double metrics_total(const StageMetrics *m)
@@ -80,6 +88,19 @@ double metrics_merge_ratio(const StageMetrics *m)
     return value / total;
 }
 
+double metrics_ipc_ratio(const StageMetrics *m)
+{
+    double total = metrics_total(m);
+    double value;
+    if (total <= 0.0) {
+        return 0.0;
+    }
+    value = m->t_ipc;
+    if (value < 0.0) value = 0.0;
+    if (value > total) value = total;
+    return value / total;
+}
+
 double metrics_throughput_batches(const StageMetrics *m)
 {
     double total = metrics_total(m);
@@ -93,7 +114,8 @@ double metrics_sequential_fraction_estimate(const StageMetrics *m)
         return 0.0;
     }
     {
-        double value = m->t_pre + m->t_sync + m->t_merge + m->t_post;
+        double value = m->t_pre + m->t_sync + m->t_ipc +
+                       m->t_merge + m->t_post;
         if (value < 0.0) value = 0.0;
         if (value > total) value = total;
         return value / total;

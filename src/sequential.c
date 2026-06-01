@@ -27,9 +27,8 @@ int run_sequential_metrics(const Config *cfg, Result *out, StageMetrics *metrics
 
     start = now_sec();
     for (long i = 0; i < cfg->trials; ++i) {
-        unsigned int trial_seed = simulation_seed_for_trial(cfg->seed, i);
         int collided = 0;
-        RiskLevel risk = run_trial(&trial_seed, cfg->time_steps, &collided);
+        RiskLevel risk = run_trial_for_index(cfg, i, &collided);
         result_add_trial(out, risk, collided);
     }
     end = now_sec();

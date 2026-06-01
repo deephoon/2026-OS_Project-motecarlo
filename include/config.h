@@ -30,18 +30,25 @@ typedef enum {
     IPC_SHM = 1
 } IpcMode;
 
+typedef enum {
+    WORKLOAD_UNIFORM = 0,
+    WORKLOAD_SKEWED = 1
+} WorkloadMode;
+
 typedef struct {
     RunMode mode;
     SyncMode sync_mode;
     ScheduleMode schedule_mode;
     MergeMode merge_mode;
     IpcMode ipc_mode;
+    WorkloadMode workload_mode;
     long trials;
     int time_steps;
     int threads;
     int processes;
     int batch_size;
     int queue_size;
+    int skew_factor;
     int pre_work;
     int post_work;
     int enable_pipeline;
