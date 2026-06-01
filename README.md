@@ -52,6 +52,319 @@
 
 ---
 
+## 🧩 OS 개념이 프로젝트에 들어간 위치
+
+이 프로젝트에서 차량 추종 위험 계산은 **workload**입니다.  
+진짜 핵심은 이 workload를 어떤 운영체제 실행 단위와 동기화 방식으로 처리하느냐입니다.
+
+즉, 프로젝트의 중심 질문은 다음입니다.
+
+```text
+같은 계산을
+1. 단일 실행 흐름으로 처리할 때
+2. 여러 thread로 나눌 때
+3. 여러 child process로 나눌 때
+4. process 내부에서 다시 thread를 사용할 때
+5. queue와 pipeline으로 stage를 나눌 때
+
+정확성, 실행 시간, synchronization overhead, IPC 비용이 어떻게 달라지는가?
+```
+
+### 1. Process
+
+관련 코드:
+
+```text
+src/process_mode.c
+src/hybrid_mode.c
+src/ipc_pipe.c
+```
+
+사용 OS 개념:
+
+| OS 개념 | 프로젝트 적용 |
+| --- | --- |
+| `fork()` | parent process가 child process를 생성 |
+| process address space | child는 parent와 독립된 메모리 공간에서 계산 |
+| `waitpid()` | parent가 child 종료를 기다림 |
+| process isolation | child가 계산한 결과는 parent 메모리에 바로 반영되지 않음 |
+| IPC | child result를 parent에게 전달하기 위해 pipe 사용 |
+
+개념적으로 process mode는 다음처럼 동작합니다.
+
+```text
+Parent process
+  ├─ fork child 0  -> 자기 trial range 계산 -> pipe write
+  ├─ fork child 1  -> 자기 trial range 계산 -> pipe write
+  └─ fork child N  -> 자기 trial range 계산 -> pipe write
+
+Parent process
+  -> pipe read
+  -> waitpid
+  -> result merge
+  -> checksum validation
+```
+
+이 구조를 통해 확인하려는 것은 단순히 “process가 빠른가?”가 아닙니다.  
+process는 thread보다 메모리 격리성이 좋지만, `fork()`와 IPC 비용이 존재합니다. 따라서 작은 workload에서는 손해를 볼 수 있고, 큰 workload에서는 병렬 계산 이득이 overhead를 이길 수 있습니다.
+
+### 2. Thread
+
+관련 코드:
+
+```text
+src/thread_mode.c
+src/pipeline_mode.c
+src/hybrid_mode.c
+```
+
+사용 OS 개념:
+
+| OS 개념 | 프로젝트 적용 |
+| --- | --- |
+| `pthread_create()` | worker thread 생성 |
+| `pthread_join()` | worker thread 종료 대기 |
+| shared address space | 여러 thread가 같은 `Result` 구조체에 접근 가능 |
+| context switching | thread 수 증가에 따른 scheduling overhead 관찰 |
+| race condition | `nosync`에서 shared result 갱신 충돌 발생 |
+
+thread mode는 다음처럼 동작합니다.
+
+```text
+Main thread
+  -> 전체 trials를 thread 수만큼 정적 분할
+  -> pthread_create로 worker 생성
+
+Worker thread 0 -> trial range 계산
+Worker thread 1 -> trial range 계산
+Worker thread 2 -> trial range 계산
+Worker thread 3 -> trial range 계산
+
+Main thread
+  -> pthread_join
+  -> local result merge 또는 shared result 확인
+  -> checksum validation
+```
+
+thread는 process보다 생성 비용과 통신 비용이 낮습니다.  
+하지만 같은 메모리를 공유하기 때문에 shared result를 동시에 갱신하면 race condition이 발생합니다. 그래서 synchronization 전략이 필요합니다.
+
+### 3. Synchronization
+
+관련 코드:
+
+```text
+src/thread_mode.c
+src/task_queue.c
+src/merge_queue.c
+src/pipeline_mode.c
+```
+
+이 프로젝트는 synchronization을 세 단계로 비교합니다.
+
+| 방식 | OS 개념 | 프로젝트에서의 의미 |
+| --- | --- | --- |
+| `nosync` | 동기화 없음 | shared counter/histogram을 동시에 갱신해 race condition 관찰 |
+| `mutex` | mutual exclusion | shared result 갱신 구간을 lock으로 보호 |
+| `reduce` | thread-local aggregation | hot loop에서는 공유 쓰기를 없애고 마지막에만 병합 |
+
+`nosync`는 일부러 틀릴 수 있게 만든 모드입니다.
+
+```text
+Thread A: total_trials 읽음
+Thread B: total_trials 읽음
+Thread A: total_trials + 1 저장
+Thread B: total_trials + 1 저장
+
+결과: 실제로는 2번 증가해야 하는데 1번만 증가할 수 있음
+```
+
+이것이 lost update입니다.  
+최종 실험에서도 `thread_4_nosync`는 빠르게 보일 수 있지만 `valid=0`, checksum mismatch가 발생하므로 “동기화가 왜 필요한지”를 보여주는 실패 사례로 사용합니다.
+
+### 4. Mutex + Condition Variable
+
+관련 코드:
+
+```text
+src/task_queue.c
+src/merge_queue.c
+```
+
+pipeline mode에서는 단순히 result만 보호하는 것이 아니라, queue 자체가 공유 자료구조가 됩니다.
+
+queue가 가진 공유 상태:
+
+```text
+head
+tail
+count
+closed
+buffer
+```
+
+이 상태는 여러 worker가 동시에 접근하므로 mutex로 보호해야 합니다.  
+하지만 mutex만으로는 “queue가 비었을 때 기다리기”, “queue가 찼을 때 기다리기”를 효율적으로 표현하기 어렵습니다. 그래서 condition variable을 함께 사용합니다.
+
+```text
+producer:
+  queue가 full이면 not_full 조건을 기다림
+  batch를 push
+  not_empty signal
+
+worker:
+  queue가 empty이면 not_empty 조건을 기다림
+  batch를 pop
+  not_full signal
+```
+
+이 구조는 busy waiting을 피하고, 필요한 thread만 sleep/wakeup 할 수 있게 합니다.  
+교수님 피드백의 “semaphore 대신 더 가벼운 mutex를 쓰되, 부족한 기능을 어떻게 보완할 것인가”에 대한 답이 바로 `mutex + condition variable`입니다.
+
+### 5. IPC
+
+관련 코드:
+
+```text
+src/ipc_pipe.c
+src/process_mode.c
+src/hybrid_mode.c
+```
+
+process는 서로 메모리를 공유하지 않습니다.  
+따라서 child process가 계산한 `Result`는 parent가 직접 볼 수 없습니다. 이 프로젝트는 pipe를 사용해 child result를 parent에게 전달합니다.
+
+```text
+Child process
+  -> local Result 계산
+  -> pipe write
+  -> exit
+
+Parent process
+  -> pipe read
+  -> result merge
+  -> waitpid
+```
+
+이때 pipe read/write와 waitpid 대기 시간이 `T_sync` 또는 merge 관련 overhead로 관찰됩니다.  
+따라서 process mode는 계산 성능뿐 아니라 IPC 비용까지 함께 분석할 수 있습니다.
+
+### 6. Scheduling / Work Distribution
+
+관련 코드:
+
+```text
+src/thread_mode.c
+src/preprocess.c
+src/pipeline_mode.c
+src/task_queue.c
+```
+
+이 프로젝트에는 두 가지 작업 분배 방식이 있습니다.
+
+| 방식 | 설명 | 장점 | 단점 |
+| --- | --- | --- | --- |
+| static partition | 처음부터 trial range를 worker 수만큼 나눔 | 단순하고 overhead 작음 | workload imbalance에 약함 |
+| queue scheduling | batch를 queue에 넣고 worker가 가져감 | 동적 분배 가능 | queue lock/condvar overhead 발생 |
+
+`thread` mode는 주로 static partition입니다.
+
+```text
+trials = 1000000
+threads = 4
+
+thread 0: 0 ~ 249999
+thread 1: 250000 ~ 499999
+thread 2: 500000 ~ 749999
+thread 3: 750000 ~ 999999
+```
+
+`pipeline` mode는 batch queue를 사용합니다.
+
+```text
+preprocessor -> batch 0 push
+preprocessor -> batch 1 push
+preprocessor -> batch 2 push
+
+worker 0 -> pop batch
+worker 1 -> pop batch
+worker 2 -> pop batch
+```
+
+이 차이를 통해 단순 partition과 producer-consumer queue 구조의 trade-off를 비교할 수 있습니다.
+
+### 7. Pipeline
+
+관련 코드:
+
+```text
+src/pipeline_mode.c
+src/task_queue.c
+src/merge_queue.c
+```
+
+pipeline mode는 실제 시스템처럼 작업을 stage로 나눕니다.
+
+```text
+Preprocessor thread
+  -> TaskQueue
+  -> Worker pool
+  -> MergeQueue
+  -> Aggregator thread
+```
+
+개념적으로는 다음과 같습니다.
+
+```text
+시간 흐름:
+
+t0: preprocessor가 batch 0 생성
+t1: worker 0이 batch 0 계산, preprocessor는 batch 1 생성
+t2: worker 1이 batch 1 계산, aggregator는 batch 0 결과 merge
+t3: worker 2가 batch 2 계산, aggregator는 batch 1 결과 merge
+```
+
+초기 latency는 존재하지만, batch가 계속 들어오면 stage overlap으로 throughput을 높일 수 있습니다.  
+다만 이 프로젝트의 실험 결과에서는 interactive merge가 final reduce보다 항상 빠르지는 않았습니다. 이는 queue, condition variable, aggregator thread의 overhead가 있기 때문입니다.
+
+### 8. Amdahl's Law
+
+관련 코드:
+
+```text
+src/metrics.c
+src/main.c
+scripts/analyze_results.py
+```
+
+이 프로젝트는 전체 시간을 stage별로 나눠 측정합니다.
+
+```text
+T_total = T_pre + T_compute + T_sync + T_merge + T_post
+```
+
+각 항목의 의미:
+
+| 항목 | OS 관점 |
+| --- | --- |
+| `T_pre` | 병렬 계산 전 준비 단계. 순차 구간으로 작용 가능 |
+| `T_compute` | 병렬화 가능한 핵심 계산 |
+| `T_sync` | lock, condition wait, IPC wait, join/wait overhead |
+| `T_merge` | partial result를 하나로 합치는 구간 |
+| `T_post` | validation/checksum 등 후처리 |
+
+Amdahl's Law에 따르면 병렬화할 수 없는 구간이 전체 speedup의 상한을 만듭니다.  
+그래서 이 프로젝트는 `--pre-work`, `--post-work` 옵션을 통해 순차 stage 비용을 조절할 수 있게 했습니다.
+
+```text
+sequential_fraction_estimate
+  = (T_pre + T_sync + T_merge + T_post) / T_total
+```
+
+결론적으로 이 프로젝트는 단순 계산 프로그램이 아니라, **OS 실행 단위와 synchronization 비용이 전체 성능에 미치는 영향을 관찰하는 실험 장치**입니다.
+
+---
+
 ## 🧠 문제 인식: 왜 단순 병렬화만으로 부족했나
 
 처음 구조는 매우 단순했습니다.
@@ -88,6 +401,341 @@ Pre-processing
 | Amdahl's Law가 잘 드러나지 않음 | `--pre-work`, `--post-work`로 순차 stage 부하를 조절 가능하게 추가 |
 
 이 변경 덕분에 단순히 “빠르다/느리다”가 아니라, **어느 stage에서 overhead가 생기는지** 설명할 수 있게 됐습니다.
+
+---
+
+## 🧭 프로젝트의 개념적 실행 흐름
+
+사용자가 다음과 같은 명령을 실행한다고 가정합니다.
+
+```sh
+./sim --mode pipeline --threads 4 --trials 1000000 --steps 50 \
+  --schedule queue --merge interactive \
+  --batch-size 1000 --queue-size 1024 \
+  --pre-work 50000 --post-work 10000 \
+  --metrics-detail 1 --seed 42
+```
+
+프로그램은 내부적으로 다음 순서로 실행됩니다.
+
+### 1단계: CLI 옵션 파싱
+
+관련 코드:
+
+```text
+src/main.c
+src/cli.c
+src/config.c
+include/config.h
+```
+
+먼저 `cli_parse_args()`가 사용자의 명령행 옵션을 읽어 `Config` 구조체를 채웁니다.
+
+```text
+mode = pipeline
+threads = 4
+trials = 1000000
+steps = 50
+schedule = queue
+merge = interactive
+batch_size = 1000
+queue_size = 1024
+pre_work = 50000
+post_work = 10000
+seed = 42
+```
+
+그 다음 `main.c`는 `cfg.mode`를 보고 어떤 실행 엔진을 호출할지 결정합니다.
+
+```text
+MODE_SEQ      -> run_sequential_metrics
+MODE_THREAD   -> run_thread_mode_metrics
+MODE_PIPELINE -> run_pipeline_mode
+MODE_PROCESS  -> run_process_mode
+MODE_HYBRID   -> run_hybrid_mode
+```
+
+이 단계는 OS 관점에서 아직 병렬 처리가 시작되기 전입니다.  
+다만 이후 실행 구조를 결정하는 설정이 여기서 확정됩니다.
+
+### 2단계: 전체 시간 측정 시작
+
+관련 코드:
+
+```text
+src/metrics.c
+include/metrics.h
+```
+
+각 mode는 실행 시작 시 `metrics_init()`으로 stage timer를 초기화하고, `now_sec()`을 이용해 전체 시간을 측정합니다.
+
+```text
+metrics->t_total_start = now_sec()
+```
+
+최종적으로 출력되는 `time_total`은 여기서 시작해서 post-processing까지 끝난 wall-clock time입니다.
+
+### 3단계: Pre-processing
+
+관련 코드:
+
+```text
+src/preprocess.c
+include/task_batch.h
+```
+
+pre-processing은 전체 trial을 batch 단위로 나누고, 각 batch에 metadata를 부여합니다.
+
+```text
+TaskBatch {
+  batch_id
+  start_idx
+  end_idx
+  base_seed
+  time_steps
+  difficulty_level
+}
+```
+
+예를 들어:
+
+```text
+trials = 1000000
+batch_size = 1000
+
+batch_count = 1000
+
+batch 0: start=0, end=1000
+batch 1: start=1000, end=2000
+...
+batch 999: start=999000, end=1000000
+```
+
+이 단계는 실제 시스템에서 입력 데이터 분할, metadata 생성, 작업 단위 준비에 해당합니다.  
+`--pre-work`는 이 stage에 고정된 CPU work를 추가해, 순차 구간이 speedup에 미치는 영향을 관찰하기 위한 실험 장치입니다.
+
+### 4단계: 실행 mode에 따른 병렬 처리
+
+여기서부터 OS 개념이 본격적으로 갈라집니다.
+
+#### `seq`
+
+```text
+for trial in all_trials:
+  run_trial()
+  result_add_trial()
+```
+
+하나의 실행 흐름에서 모든 trial을 처리합니다.  
+이 결과가 speedup 계산의 baseline입니다.
+
+#### `thread`
+
+```text
+main thread
+  -> thread 0 생성
+  -> thread 1 생성
+  -> thread 2 생성
+  -> thread 3 생성
+
+각 thread
+  -> 자기 trial range 계산
+  -> sync mode에 따라 결과 저장
+
+main thread
+  -> join
+  -> merge
+```
+
+`thread` mode에서는 같은 process 안에서 여러 thread가 실행됩니다.  
+메모리를 공유하기 때문에 빠르게 통신할 수 있지만, shared result를 동시에 수정하면 race condition이 발생할 수 있습니다.
+
+#### `process`
+
+```text
+parent process
+  -> fork child 0
+  -> fork child 1
+  -> fork child 2
+  -> fork child 3
+
+child process
+  -> 자기 trial range 계산
+  -> pipe로 Result 전송
+  -> exit
+
+parent process
+  -> pipe read
+  -> waitpid
+  -> merge
+```
+
+`process` mode에서는 child process가 독립된 address space에서 계산합니다.  
+따라서 결과 공유를 위해 pipe IPC가 필요합니다.
+
+#### `hybrid`
+
+```text
+parent process
+  -> 여러 child process 생성
+
+각 child process
+  -> 내부에서 pthread worker 생성
+  -> child-local reduce 수행
+  -> pipe로 parent에게 결과 전송
+
+parent process
+  -> child result merge
+```
+
+hybrid는 process와 thread를 모두 사용합니다.  
+process는 큰 작업 그룹을 나누고, thread는 각 process 내부에서 계산을 병렬화합니다.
+
+#### `pipeline`
+
+```text
+preprocessor thread
+  -> TaskQueue에 batch push
+
+worker threads
+  -> TaskQueue에서 batch pop
+  -> run_batch()
+  -> final partial 저장 또는 MergeQueue push
+
+aggregator thread
+  -> MergeQueue에서 partial result pop
+  -> global result에 merge
+```
+
+pipeline mode는 producer-consumer 구조입니다.  
+`TaskQueue`와 `MergeQueue`는 mutex와 condition variable을 사용해 동기화됩니다.
+
+### 5단계: Trial 계산
+
+관련 코드:
+
+```text
+src/simulation.c
+```
+
+각 trial은 독립적인 차량 추종 위험 시나리오입니다.
+
+```text
+seed 생성
+차량 초기 조건 생성
+time step 반복
+거리/TTC 계산
+충돌 여부 판단
+risk bucket 분류
+```
+
+중요한 점은 trial들이 deterministic seed 기반이라는 것입니다.  
+따라서 mode가 달라도 같은 trial index는 같은 결과를 만들어야 합니다. 이 성질 덕분에 checksum으로 correctness를 검증할 수 있습니다.
+
+### 6단계: Result 병합
+
+관련 코드:
+
+```text
+src/result.c
+src/thread_mode.c
+src/pipeline_mode.c
+src/process_mode.c
+src/hybrid_mode.c
+```
+
+각 worker가 만든 결과는 결국 하나의 `Result`로 합쳐집니다.
+
+```text
+Result {
+  total_trials
+  collision_count
+  histogram[RISK_BUCKETS]
+  checksum
+}
+```
+
+병합 방식은 mode마다 다릅니다.
+
+| mode | 병합 방식 |
+| --- | --- |
+| `seq` | 바로 global result에 누적 |
+| `thread mutex` | 매 trial마다 mutex로 global result 보호 |
+| `thread reduce` | thread-local result를 마지막에 merge |
+| `process` | child result를 pipe로 받은 뒤 parent가 merge |
+| `hybrid` | child 내부 thread 결과 merge 후 parent가 다시 merge |
+| `pipeline final` | 모든 worker 종료 후 final partials merge |
+| `pipeline interactive` | aggregator가 실행 중간에 partial result를 계속 merge |
+
+이 단계에서 `T_merge`가 측정됩니다.
+
+### 7단계: Post-processing
+
+관련 코드:
+
+```text
+src/postprocess.c
+```
+
+post-processing은 결과가 맞는지 검증합니다.
+
+```text
+hist_sum == trials ?
+total_trials == trials ?
+collision_count 범위가 정상인가?
+checksum 계산
+```
+
+최종 CSV의 `valid=1`은 이 검증을 통과했다는 뜻입니다.  
+`--post-work`는 이 stage에 고정된 CPU work를 추가해, 후처리 순차 구간이 전체 speedup에 어떤 영향을 주는지 관찰하기 위한 옵션입니다.
+
+### 8단계: CSV Metrics 출력
+
+관련 코드:
+
+```text
+src/main.c
+scripts/run_final.sh
+scripts/analyze_results.py
+```
+
+`--metrics-detail 1`이면 다음과 같은 CSV가 출력됩니다.
+
+```text
+mode,schedule,merge,sync,processes,threads,trials,steps,
+time_total,time_pre,time_compute,time_sync,time_merge,time_post,
+sequential_fraction_estimate,compute_ratio,
+total_trials,collision_count,hist_sum,checksum,valid
+```
+
+단일 실행만으로는 speedup baseline을 알 수 없으므로, 최종 speedup/efficiency는 `scripts/analyze_results.py`가 계산합니다.
+
+```text
+speedup_vs_seq_avg = seq 평균 시간 / 해당 mode 평균 시간
+efficiency_vs_seq_avg = speedup / worker_count
+```
+
+최종 보고서에서는 raw 실행 결과가 아니라 `final_analyzed.csv`를 기준으로 해석합니다.
+
+### 전체 흐름 요약
+
+```text
+사용자 명령
+  -> CLI parsing
+  -> Config 생성
+  -> mode 선택
+  -> metrics 시작
+  -> pre-processing
+  -> seq/thread/process/hybrid/pipeline 실행
+  -> synchronization 또는 IPC
+  -> merge
+  -> post-processing
+  -> checksum validation
+  -> CSV 출력
+  -> analyze_results.py로 반복 실험 요약
+```
+
+이 흐름 때문에 프로젝트는 단순 simulation program이 아니라, **OS 실행 구조별 성능과 정확성 trade-off를 관찰하는 실험 시스템**이 됩니다.
 
 ---
 
@@ -472,6 +1120,7 @@ interactive merge는 final reduce보다 항상 빠르지는 않습니다.
 - “Docker Desktop 결과가 순수 물리 Linux 결과와 완전히 같다”
 
 더 자세한 재현 절차와 Linux/Windows WSL 실행 방법은 [`docs/reproducible_linux_experiment_guide.md`](docs/reproducible_linux_experiment_guide.md)에 정리되어 있습니다.
+최종 제출 전 검증 결과, Amdahl stress 실험, CPU/memory 측정, 그래프 목록은 [`docs/final_validation_report.md`](docs/final_validation_report.md)에 정리했습니다.
 
 ---
 
@@ -522,6 +1171,28 @@ valid_all
 CPU/memory usage는 `pidstat`, `/usr/bin/time -v`로 별도 캡처합니다.
 
 Linux/Windows WSL/Docker 재현 절차와 100,000·1,000,000 trials 반복 측정 결과는 [`docs/reproducible_linux_experiment_guide.md`](docs/reproducible_linux_experiment_guide.md)에 정리했습니다.
+
+Amdahl's Law를 더 명확히 보여주기 위해 순차 pre/post 구간을 키운 stress 실험도 추가로 수행했습니다.
+
+```sh
+TRIALS=1000000 STEPS=50 REPEATS=5 \
+PRE_WORK=50000000 POST_WORK=10000000 \
+OUT_DIR=results/csv/amdahl_stress scripts/run_final.sh
+```
+
+이 조건에서는 `thread_8_reduce` speedup이 기본 실험의 `4.798x`에서 `1.443x`로 제한되어, 순차 구간이 커질수록 병렬화 효율이 제한되는 현상을 확인했습니다.
+
+최종 발표용 그래프는 `results/graphs/`에 생성되어 있습니다.
+
+| 그래프 | 목적 |
+| --- | --- |
+| `thread_speedup_efficiency.svg` | thread scaling과 efficiency 감소 |
+| `sync_compare.svg` | nosync/mutex/reduce 비교 |
+| `process_hybrid_compare.svg` | process/hybrid 비교 |
+| `pipeline_merge_compare.svg` | final reduce vs interactive merge |
+| `stage_time_stacked.svg` | stage별 실행 시간 |
+| `amdahl_stress_speedup.svg` | 기본 실험 vs Amdahl stress speedup |
+| `amdahl_stress_stage_time.svg` | stress 조건 stage time |
 
 ---
 
@@ -670,8 +1341,11 @@ pidstat -u -r -C sim 1
 ├── docs/
 │   ├── final_presentation_changes.md
 │   ├── os26_final_experiment_guide.md
+│   ├── final_validation_report.md
 │   ├── final_plan.md
 │   └── experiment_plan.md
+├── results/
+│   └── graphs/              # final presentation SVG graphs
 ├── results/
 │   ├── csv/
 │   └── res/

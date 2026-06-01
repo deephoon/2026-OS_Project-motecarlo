@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="560" viewBox="0 0 980 560">
+<rect width="100%" height="100%" fill="white"/>
+<style>text{font-family:Arial,Helvetica,sans-serif;fill:#0f172a}.axis{stroke:#334155;stroke-width:1}.grid{stroke:#e2e8f0;stroke-width:1}.label{font-size:12px}.title{font-size:20px;font-weight:700}.subtitle{font-size:12px;fill:#475569}.tick{font-size:11px;fill:#475569}</style>
+<text class="title" x="90" y="34">Process and Hybrid Comparison</text>
+<text class="subtitle" x="90" y="55">fork/pipe overhead vs process+thread parallelism</text>
+<line class="grid" x1="90" y1="440.0" x2="940" y2="440.0"/>
+<text class="tick" x="82" y="444.0" text-anchor="end">0.00</text>
+<line class="grid" x1="90" y1="367.0" x2="940" y2="367.0"/>
+<text class="tick" x="82" y="371.0" text-anchor="end">0.98</text>
+<line class="grid" x1="90" y1="294.0" x2="940" y2="294.0"/>
+<text class="tick" x="82" y="298.0" text-anchor="end">1.97</text>
+<line class="grid" x1="90" y1="221.0" x2="940" y2="221.0"/>
+<text class="tick" x="82" y="225.0" text-anchor="end">2.95</text>
+<line class="grid" x1="90" y1="148.0" x2="940" y2="148.0"/>
+<text class="tick" x="82" y="152.0" text-anchor="end">3.93</text>
+<line class="grid" x1="90" y1="75.0" x2="940" y2="75.0"/>
+<text class="tick" x="82" y="79.0" text-anchor="end">4.91</text>
+<line class="axis" x1="90" y1="75" x2="90" y2="440"/>
+<line class="axis" x1="90" y1="440" x2="940" y2="440"/>
+<text class="label" x="20" y="257.5" transform="rotate(-90 20,257.5)">seconds / ratio</text>
+<text class="tick" x="160.8" y="488" text-anchor="middle">p1</text>
+<rect x="102.0" y="432.3" width="54.8" height="7.7" rx="2" fill="#ea580c"/>
+<text class="tick" x="129.4" y="427.3" text-anchor="middle">0.10</text>
+<rect x="164.8" y="368.4" width="54.8" height="71.6" rx="2" fill="#2563eb"/>
+<text class="tick" x="192.2" y="363.4" text-anchor="middle">0.96</text>
+<text class="tick" x="302.5" y="488" text-anchor="middle">p2</text>
+<rect x="243.7" y="435.7" width="54.8" height="4.3" rx="2" fill="#ea580c"/>
+<text class="tick" x="271.1" y="430.7" text-anchor="middle">0.06</text>
+<rect x="306.5" y="311.8" width="54.8" height="128.2" rx="2" fill="#2563eb"/>
+<text class="tick" x="333.9" y="306.8" text-anchor="middle">1.73</text>
+<text class="tick" x="444.2" y="488" text-anchor="middle">p4</text>
+<rect x="385.3" y="437.8" width="54.8" height="2.2" rx="2" fill="#ea580c"/>
+<text class="tick" x="412.8" y="432.8" text-anchor="middle">0.03</text>
+<rect x="448.2" y="195.6" width="54.8" height="244.4" rx="2" fill="#2563eb"/>
+<text class="tick" x="475.6" y="190.6" text-anchor="middle">3.29</text>
+<text class="tick" x="585.8" y="488" text-anchor="middle">h2x2</text>
+<rect x="527.0" y="437.7" width="54.8" height="2.3" rx="2" fill="#ea580c"/>
+<text class="tick" x="554.4" y="432.7" text-anchor="middle">0.03</text>
+<rect x="589.8" y="203.1" width="54.8" height="236.9" rx="2" fill="#2563eb"/>
+<text class="tick" x="617.2" y="198.1" text-anchor="middle">3.19</text>
+<text class="tick" x="727.5" y="488" text-anchor="middle">h2x4</text>
+<rect x="668.7" y="438.3" width="54.8" height="1.7" rx="2" fill="#ea580c"/>
+<text class="tick" x="696.1" y="433.3" text-anchor="middle">0.02</text>
+<rect x="731.5" y="122.6" width="54.8" height="317.4" rx="2" fill="#2563eb"/>
+<text class="tick" x="758.9" y="117.6" text-anchor="middle">4.27</text>
+<text class="tick" x="869.2" y="488" text-anchor="middle">h4x2</text>
+<rect x="810.3" y="438.3" width="54.8" height="1.7" rx="2" fill="#ea580c"/>
+<text class="tick" x="837.7" y="433.3" text-anchor="middle">0.02</text>
+<rect x="873.2" y="126.2" width="54.8" height="313.8" rx="2" fill="#2563eb"/>
+<text class="tick" x="900.6" y="121.2" text-anchor="middle">4.22</text>
+<rect x="90" y="513" width="12" height="12" fill="#ea580c"/>
+<text class="label" x="108" y="524">avg time sec</text>
+<rect x="250" y="513" width="12" height="12" fill="#2563eb"/>
+<text class="label" x="268" y="524">speedup</text>
+</svg>
