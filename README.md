@@ -16,9 +16,9 @@
 
 **자동차 위험 시뮬레이션을 소재로 삼아, child process와 multithread를 이용한 병렬처리 및 synchronization 문제 해결 과정을 정량적으로 보여주는 운영체제 실험 시스템입니다.**
 
-중간발표 당시에는 `seq/thread` 중심의 synchronization 비교가 핵심이었고, 현재는 최종 프로젝트 가이드에 맞춰 `process`, `hybrid`, `pipeline`, `IPC`, `interactive merge`, stage-level metrics까지 확장했습니다.
+초기 MVP에서는 `seq/thread` 중심의 synchronization 비교가 핵심이었고, 현재는 최종 프로젝트 가이드에 맞춰 `process`, `hybrid`, `pipeline`, `IPC`, `interactive merge`, stage-level metrics까지 확장했습니다.
 
-| 구분 | 중간발표 MVP | 현재 최종 구조 |
+| 구분 | 초기 MVP | 현재 최종 구조 |
 | --- | --- | --- |
 | 실행 모드 | `seq`, `thread` | `seq`, `thread`, `pipeline`, `process`, `hybrid` |
 | 병렬 단위 | pthread worker | thread + child process + process 내부 thread |
@@ -41,7 +41,7 @@
 | 최종 성능 실험 | Docker Desktop 기반 Ubuntu 22.04 container에서 `trials=1000000`, `steps=50`, `repeats=5` 조건으로 반복 측정 | `results/csv/docker_1m_shm_uniform/final_analyzed.csv` |
 | Amdahl's Law 보강 | `PRE_WORK=50000000`, `POST_WORK=10000000` stress 실험으로 순차 구간이 커질 때 speedup이 제한됨을 확인 | `results/csv/amdahl_stress/final_analyzed.csv` |
 | CPU/memory 측정 | `seq`, `thread_8_reduce`, `hybrid_2x4`를 `/usr/bin/time -v`로 측정해 CPU 사용률과 RSS 확보 | `docs/final_validation_report.md` |
-| 발표용 그래프 생성 | thread scaling, sync 비교, process/hybrid, pipeline merge, stage time, Amdahl stress 그래프 생성 | `results/graphs/*.svg` |
+| 분석 그래프 생성 | thread scaling, sync 비교, process/hybrid, pipeline merge, stage time, Amdahl stress 그래프 생성 | `results/graphs/*.svg` |
 | 재현성 가이드 | Docker, Windows WSL2 Ubuntu, 일반 Linux 실행 방법 정리 | `docs/reproducible_linux_experiment_guide.md` |
 | 최종 검증 리포트 | 기능 검증, 기본 성능, Amdahl stress, CPU/memory, 그래프 목록, 보고서 문장 정리 | `docs/final_validation_report.md` |
 | 코드 설득력 추가 보강 | `time_ipc`, queue wait counters, `--workload skewed`, `--ipc shm` 실제 구현 추가 | `src/*`, `include/*`, `scripts/*` |
@@ -140,6 +140,81 @@ docs/docker_shm_skew_validation.md
 results/csv/docker_1m_shm_uniform/final_analyzed.csv
 results/csv/docker_1m_shm_skewed/final_analyzed.csv
 ```
+
+---
+
+## ✅ 최종 자체 검증 및 가이드 적합성
+
+현재 프로젝트는 `ref/os26_project.pdf`의 핵심 요구사항을 대부분 충족합니다. 구현의 목적은 “가장 빠른 코드 하나”가 아니라, 같은 CPU-bound workload를 여러 OS 실행 구조로 처리하면서 **정확성, 병렬화 한계, synchronization overhead, IPC 비용, queue scheduling 효과**를 정량적으로 비교하는 것입니다.
+
+냉정한 현재 상태:
+
+| 항목 | 판단 |
+| --- | --- |
+| 구현 완성도 | `seq/thread/process/hybrid/pipeline/ideal` 모두 실행 가능 |
+| 정확성 검증 | 정상 mode는 `valid=1`, checksum match 유지 |
+| synchronization 증거 | `nosync`는 checksum mismatch로 실패, `reduce/mutex`는 정확성 통과 |
+| process/thread 구분 | `process`는 child process만 사용, `hybrid`는 child 내부 pthread까지 사용 |
+| IPC 비교 | `pipe`와 `mmap shared memory` 결과 비교 가능 |
+| pipeline 분석 | final reduce와 interactive merge, batch size, queue overhead 비교 가능 |
+| Amdahl 분석 | pre/post sequential stage를 키운 stress 실험으로 speedup 제한 확인 |
+| CPU utilization | ideal mode에서 4 threads 기준 per-core utilization `99.8%` 확인 |
+| 환경 해석 | Docker Desktop Ubuntu VM 결과이며 native Linux 절대 성능으로 주장하지 않음 |
+
+### 프로젝트 가이드 요구사항 점검
+
+| `os26_project.pdf` 요구사항 | 현재 대응 | 상태 |
+| --- | --- | --- |
+| 4개 이상 core를 가진 시스템에서 N개 core 활용 | `thread 1/2/4/8`, `ideal strong/utilization`, `mpstat` 측정 | 충족 |
+| child process 사용 | `fork()`, `waitpid()`, `process mode`, `pipe/shm IPC` | 충족 |
+| multiple threads 사용 | `pthread_create`, `pthread_join`, `thread/pipeline/hybrid mode` | 충족 |
+| synchronization 문제 정의와 해결 | `nosync` 실패, `mutex`, `reduce`, queue mutex+condvar | 충족 |
+| parent sequential과 child process 비교 | `seq`, `process_1/2/4_pipe`, `process_1/2/4_shm` | 충족 |
+| single/multi process와 single/multi thread 비교 | `thread 1/2/4/8`, `process 1/2/4`, `hybrid 2x2/2x4/4x2` | 충족 |
+| process와 thread를 섞은 시스템 구성 | `hybrid mode`에서 child process 내부 pthread worker 사용 | 충족 |
+| sync 사용/미사용 비교 | `thread_4_nosync`, `thread_4_mutex`, `thread_4_reduce` | 충족 |
+| 다양한 test vector | trials, steps, threads, processes, batch size, IPC, workload, pre/post work | 충족 |
+| 성능 분석 지표 | time, speedup, efficiency, stage time, IPC time, queue wait count, CPU%, RSS | 충족 |
+| 문제 인식 → 원인 분석 → 구조 개선 | 단순 병렬화 → pre/post stage → skewed workload → queue/pipeline/IPC/ideal benchmark | 충족 |
+
+### 교수님 피드백 대응
+
+| 피드백 | 현재 반영 |
+| --- | --- |
+| 최종 성능보다 설계까지 가는 문제/원인/해결 과정이 중요 | README와 검증 문서가 `문제 → 원인 → 해결 → 실험 검증` 흐름으로 정리됨 |
+| N worker에서 전체 실행시간이 얼마나 줄어드는지 보여야 함 | `ideal_strong_summary.csv`, `docker_1m_shm_uniform/final_analyzed.csv`에서 speedup/efficiency 계산 |
+| CPU utilization이 100%에 가까워야 함 | ideal utilization mode에서 4 threads CPU `399.0%`, per-core `99.8%` |
+| 각 core별 활용률이 균일한지 보여야 함 | `results/csv/core_util/mpstat_threads4.txt`에서 core 0~3이 100% 근처로 반복 측정됨 |
+| 동일한 시스템에서 성능이 기대보다 늦게 떨어지는 이유를 분석해야 함 | real simulation에서 sync/IPC/queue/merge overhead가 ideal benchmark보다 efficiency를 낮추는 구조로 비교 가능 |
+| 10분 설명에서는 핵심만 선택해야 함 | 모든 결과를 나열하지 않고 ideal utilization, sync 실패/해결, Amdahl stress, process/thread/hybrid trade-off 중심으로 압축해야 함 |
+
+### 최종 검증 수치
+
+Ideal benchmark는 실제 차량 simulation이 아니라, CPU core saturation 상한선을 확인하기 위한 인위적 benchmark입니다.
+
+| Threads | Avg Time | Speedup | Efficiency | Avg CPU% | Util/Core |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 5.013s | 1.000x | 1.000 | 99.0% | 99.0% |
+| 2 | 2.503s | 2.003x | 1.001 | 199.0% | 99.5% |
+| 4 | 1.428s | 3.511x | 0.878 | 399.0% | 99.8% |
+| 8 | 0.912s | 5.495x | 0.687 | 778.5% | 97.3% |
+
+Real simulation에서는 ideal mode와 달리 synchronization, IPC, queue, merge, scheduling overhead가 들어갑니다. 따라서 ideal benchmark보다 efficiency가 낮아지는 것이 정상이며, 그 차이를 분석하는 것이 이 프로젝트의 핵심입니다.
+
+| 실험 | 결과 | 해석 |
+| --- | --- | --- |
+| `thread_8_reduce` uniform | speedup `4.481x` | 균등 workload에서 thread-local reduce가 강함 |
+| `thread_4_mutex` uniform | speedup `0.502x` | 매 trial lock contention 때문에 느림 |
+| `thread_4_nosync` | `valid=0` | 빠르게 보여도 race condition으로 실패 |
+| `process_4_shm` uniform | speedup `3.323x` | shared memory IPC는 pipe보다 약간 유리 |
+| `pipeline_final_b1000` skewed | `0.036921s` | queue scheduling이 불균등 workload를 완화 |
+| Amdahl stress `thread_8_reduce` | speedup `1.443x` | sequential pre/post stage가 커지면 speedup이 제한됨 |
+
+남은 리스크는 구현보다 문서 해석입니다.
+
+- Docker Desktop 기반 Ubuntu VM 결과이므로 순수 물리 Linux 절대 성능이라고 주장하지 않습니다.
+- `T_sync`는 여러 worker의 lock/condition wait 누적값이므로 `T_total`과 단순 합산되는 wall-clock stage가 아닙니다.
+- 최종 설명에서는 “가장 빠른 mode”보다 “OS 구조별 trade-off”를 중심 결론으로 잡아야 합니다.
 
 ---
 
@@ -1529,7 +1604,7 @@ OUT_DIR=results/csv/amdahl_stress scripts/run_final.sh
 
 이 조건에서는 `thread_8_reduce` speedup이 최종 uniform 기준 실험의 `4.481x`보다 훨씬 낮은 `1.443x`로 제한되어, 순차 구간이 커질수록 병렬화 효율이 제한되는 현상을 확인했습니다.
 
-최종 발표용 그래프는 `results/graphs/`에 생성되어 있습니다.
+최종 분석 그래프는 `results/graphs/`에 생성되어 있습니다.
 
 | 그래프 | 목적 |
 | --- | --- |
@@ -1545,7 +1620,7 @@ OUT_DIR=results/csv/amdahl_stress scripts/run_final.sh
 
 ## 🐳 Docker Desktop Ubuntu Container 실행
 
-macOS에서도 컴파일은 가능하지만, 발표/보고서용 성능 수치는 Linux 기준이 더 적합합니다.
+macOS에서도 컴파일은 가능하지만, 최종 보고서용 성능 수치는 Linux 기준이 더 적합합니다.
 다만 Docker Desktop은 macOS/Windows 위의 Linux VM에서 실행되므로 **순수 물리 Linux 결과와 완전히 같다고 주장하면 안 됩니다.**
 
 보고서에서는 다음 표현을 권장합니다.
@@ -1556,7 +1631,7 @@ Docker Desktop 기반 Ubuntu 22.04 container에서 반복 측정했다.
 순수 물리 Linux의 절대 성능으로 일반화하지 않는다.
 ```
 
-가능하면 팀원 중 Windows 사용자는 WSL2 Ubuntu에서, Linux 사용자는 native Linux에서 같은 명령을 한 번 더 실행해 교차 확인하는 것이 좋습니다.
+가능하면 Windows 환경에서는 WSL2 Ubuntu에서, Linux 환경에서는 native Linux에서 같은 명령을 한 번 더 실행해 교차 확인하는 것이 좋습니다.
 
 ```sh
 docker build -t os-montecarlo-risk .
@@ -1588,7 +1663,7 @@ pidstat -u -r -C sim 1
 
 ### WSL2 Ubuntu 권장
 
-Windows 팀원이 결과를 보강하려면 Docker Desktop보다 WSL2 Ubuntu를 우선 권장합니다. WSL2도 VM 계층이 있지만, POSIX API와 Linux toolchain을 더 직접적으로 사용할 수 있고, Docker Desktop 결과와 교차 비교하기 좋습니다.
+Windows 환경에서 결과를 보강하려면 Docker Desktop보다 WSL2 Ubuntu를 우선 권장합니다. WSL2도 VM 계층이 있지만, POSIX API와 Linux toolchain을 더 직접적으로 사용할 수 있고, Docker Desktop 결과와 교차 비교하기 좋습니다.
 
 PowerShell 관리자 권한:
 
@@ -1699,17 +1774,23 @@ pidstat -u -r -C sim 1
 │   ├── postprocess.c        # validation/checksum
 │   └── metrics.c            # stage timing
 ├── scripts/
-│   ├── run_midterm.sh
 │   ├── run_final.sh
-│   └── analyze_results.py
+│   ├── analyze_results.py
+│   ├── run_ideal_scaling.sh
+│   ├── run_core_utilization.sh
+│   ├── analyze_ideal.py
+│   └── make_final_graphs.py
 ├── docs/
-│   ├── final_presentation_changes.md
 │   ├── os26_final_experiment_guide.md
 │   ├── final_validation_report.md
-│   ├── final_plan.md
+│   ├── docker_shm_skew_validation.md
+│   ├── ideal_benchmark_report.md
+│   ├── reproducible_linux_experiment_guide.md
+│   ├── linux_capture_guide.md
+│   ├── design.md
 │   └── experiment_plan.md
 ├── results/
-│   └── graphs/              # final presentation SVG graphs
+│   └── graphs/              # final analysis SVG graphs
 ├── results/
 │   ├── csv/
 │   └── res/
