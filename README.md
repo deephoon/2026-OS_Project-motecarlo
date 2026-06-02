@@ -143,6 +143,112 @@ results/csv/docker_1m_shm_skewed/final_analyzed.csv
 
 ---
 
+## 🧪 Ideal Core Saturation Benchmark
+
+`ideal` mode는 실제 차량 추종 simulation이 아닙니다.
+이 모드는 lock, IPC, queue, merge queue, shared result update를 제거하고, 각 worker가 독립적인 순수 정수 연산만 수행하게 만든 **N-core utilization 상한선 측정용 benchmark**입니다.
+
+왜 추가했나?
+
+| 문제 | ideal mode로 확인하는 것 |
+| --- | --- |
+| 실제 simulation만 보면 CPU core를 충분히 쓰는지 판단이 어려움 | lock/IPC/queue가 없는 조건에서 N개 worker가 CPU를 얼마나 채우는지 확인 |
+| `thread/process/hybrid/pipeline` 효율이 낮아졌을 때 원인 설명이 필요 | ideal 결과와 real simulation 결과를 비교해 synchronization/IPC/merge overhead를 분리 설명 |
+| 1 worker에서 N worker로 늘릴 때 이상적 시간 감소를 보여줘야 함 | strong scaling에서 `T1/N`과 실제 `TN` 비교 |
+
+### ideal mode와 real simulation mode 차이
+
+| 항목 | ideal mode | real simulation mode |
+| --- | --- | --- |
+| 목적 | core saturation과 strong scaling 상한선 확인 | OS 구조별 trade-off 분석 |
+| workload | 순수 정수 CPU loop | Monte Carlo 차량 추종 risk simulation |
+| worker 결과 | thread-local checksum | histogram, collision count, checksum |
+| hot loop 공유 상태 | 없음 | mutex/reduce/nosync에 따라 다름 |
+| IPC | 없음 | process/hybrid에서 pipe 또는 shared memory |
+| queue | 없음 | pipeline에서 task queue/merge queue 사용 |
+| 해석 | “이론적으로 얼마나 잘 찰 수 있는가” | “실제 OS 구조에서 왜 효율이 낮아지는가” |
+
+### strong scaling 실험
+
+총 작업량을 고정하고 worker 수만 늘립니다.
+
+```sh
+./sim --mode ideal --scaling strong \
+  --threads 4 \
+  --work-iters 4000000000 \
+  --affinity on
+```
+
+해석:
+
+```text
+T1 = threads=1 실행 시간
+ideal_time(N) = T1 / N
+speedup(N) = T1 / TN
+efficiency(N) = speedup(N) / N
+```
+
+실험 스크립트:
+
+```sh
+WORK_ITERS=4000000000 REPEATS=3 scripts/run_ideal_scaling.sh
+python3 scripts/analyze_ideal.py
+```
+
+생성 파일:
+
+```text
+results/csv/ideal/ideal_strong_raw.csv
+results/csv/ideal/ideal_strong_summary.csv
+```
+
+### CPU utilization 실험
+
+각 worker에게 동일한 작업량을 주어 N개 worker가 동시에 CPU를 오래 점유하게 만듭니다.
+
+```sh
+/usr/bin/time -v ./sim --mode ideal \
+  --scaling utilization \
+  --threads 4 \
+  --work-iters 2000000000 \
+  --affinity on
+```
+
+per-core utilization은 Linux의 `mpstat`로 확인합니다.
+
+```sh
+THREADS=4 WORK_ITERS=2000000000 scripts/run_core_utilization.sh
+python3 scripts/analyze_ideal.py
+```
+
+생성 파일:
+
+```text
+results/csv/core_util/mpstat_threads4.txt
+results/csv/core_util/time_threads4.txt
+results/csv/core_util/sim_threads4.csv
+results/csv/ideal/ideal_utilization_summary.csv
+docs/ideal_benchmark_report.md
+```
+
+보고서에서는 다음 흐름으로 해석합니다.
+
+```text
+1. ideal mode는 lock/IPC/queue/merge를 제거한 CPU-bound 상한선이다.
+2. 이 조건에서 N개 worker가 core를 얼마나 채우는지 확인한다.
+3. strong scaling에서 T1/N에 얼마나 가까운지 계산한다.
+4. 이후 real simulation mode와 비교해 synchronization, IPC, queue, merge overhead가 efficiency를 낮추는 원인을 분석한다.
+```
+
+주의할 점:
+
+- Docker Desktop, WSL2, native Linux는 CPU scheduler와 resource limit이 다릅니다.
+- `--affinity on`은 Linux에서만 의미가 있으며, Docker/WSL에서는 실패하거나 제한될 수 있습니다.
+- affinity 실패는 프로그램 실패가 아니라 warning으로 처리됩니다.
+- 최종 보고서에서는 “항상 100% utilization을 달성했다”가 아니라, **ideal condition에서 100%에 가까운 상황을 만들고 real condition에서 멀어지는 원인을 분석했다**고 써야 합니다.
+
+---
+
 ## 📌 프로젝트 가이드 요구사항 대응
 
 `ref/os26_project.pdf`의 핵심 요구사항을 현재 구현과 연결하면 다음과 같습니다.

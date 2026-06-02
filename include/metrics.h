@@ -25,6 +25,8 @@ typedef struct {
     unsigned long ipc_bytes;
 } StageMetrics;
 
+typedef StageMetrics Metrics;
+
 double now_sec(void);
 double elapsed_sec(double start, double end);
 void metrics_init(StageMetrics *m);

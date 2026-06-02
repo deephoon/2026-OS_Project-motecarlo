@@ -11,12 +11,14 @@ void cli_print_usage(FILE *out, const char *program)
 {
     fprintf(out,
             "Usage: %s [options]\n"
-            "  --mode <seq|thread|pipeline|process|hybrid>\n"
+            "  --mode <seq|thread|pipeline|process|hybrid|ideal>\n"
+            "  --scaling <strong|utilization>\n"
             "  --schedule <static|queue>\n"
             "  --merge <final|interactive>\n"
             "  --trials <int> --steps <int> --threads <int>\n"
             "  --processes <int> --batch-size <int> --queue-size <int>\n"
             "  --workload <uniform|skewed> --skew-factor <int>\n"
+            "  --work-iters <int> --affinity <on|off> --core-count <int>\n"
             "  --pre-work <int> --post-work <int>\n"
             "  --sync <nosync|mutex|reduce> --ipc <pipe|shm>\n"
             "  --enable-pipeline <0|1> --metrics-detail <0|1>\n"
@@ -31,6 +33,21 @@ static int parse_long_arg(const char *text, long min_value, long max_value,
     long value;
     errno = 0;
     value = strtol(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' ||
+        value < min_value || value > max_value) {
+        return -1;
+    }
+    *out = value;
+    return 0;
+}
+
+static int parse_ll_arg(const char *text, long long min_value,
+                        long long max_value, long long *out)
+{
+    char *end = 0;
+    long long value;
+    errno = 0;
+    value = strtoll(text, &end, 10);
     if (errno != 0 || end == text || *end != '\0' ||
         value < min_value || value > max_value) {
         return -1;
@@ -68,6 +85,8 @@ int cli_parse_args(int argc, char **argv, Config *cfg)
             cfg->verbose = 1;
         } else if (strcmp(arg, "--mode") == 0) {
             if (require_value(argc, &i) != 0 || parse_run_mode(argv[i], &cfg->mode) != 0) return -1;
+        } else if (strcmp(arg, "--scaling") == 0) {
+            if (require_value(argc, &i) != 0 || parse_scaling_mode(argv[i], &cfg->scaling_mode) != 0) return -1;
         } else if (strcmp(arg, "--schedule") == 0) {
             if (require_value(argc, &i) != 0 || parse_schedule_mode(argv[i], &cfg->schedule_mode) != 0) return -1;
         } else if (strcmp(arg, "--merge") == 0) {
@@ -92,6 +111,13 @@ int cli_parse_args(int argc, char **argv, Config *cfg)
             if (parse_int_option(argc, argv, &i, 1, INT_MAX, &cfg->queue_size) != 0) return -1;
         } else if (strcmp(arg, "--skew-factor") == 0) {
             if (parse_int_option(argc, argv, &i, 1, INT_MAX, &cfg->skew_factor) != 0) return -1;
+        } else if (strcmp(arg, "--work-iters") == 0) {
+            if (require_value(argc, &i) != 0 ||
+                parse_ll_arg(argv[i], 1, LLONG_MAX, &cfg->work_iters) != 0) return -1;
+        } else if (strcmp(arg, "--affinity") == 0) {
+            if (require_value(argc, &i) != 0 || parse_on_off(argv[i], &cfg->affinity_enabled) != 0) return -1;
+        } else if (strcmp(arg, "--core-count") == 0) {
+            if (parse_int_option(argc, argv, &i, 0, INT_MAX, &cfg->core_count) != 0) return -1;
         } else if (strcmp(arg, "--pre-work") == 0) {
             if (parse_int_option(argc, argv, &i, 0, INT_MAX, &cfg->pre_work) != 0) return -1;
         } else if (strcmp(arg, "--post-work") == 0) {

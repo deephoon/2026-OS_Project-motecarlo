@@ -1,6 +1,7 @@
 #include "cli.h"
 #include "config.h"
 #include "hybrid_mode.h"
+#include "ideal_benchmark.h"
 #include "metrics.h"
 #include "pipeline_mode.h"
 #include "process_mode.h"
@@ -10,6 +11,25 @@
 #include "thread_mode.h"
 
 #include <stdio.h>
+
+static void print_ideal_header(void)
+{
+    puts("mode,scaling,threads,work_iters,affinity,time_total,checksum,valid");
+}
+
+static void print_ideal_row(const Config *cfg, const IdealResult *result)
+{
+    int valid = result != 0 && result->checksum != 0ULL;
+    printf("%s,%s,%d,%lld,%s,%.9f,%llu,%d\n",
+           run_mode_to_string(cfg->mode),
+           scaling_mode_to_string(cfg->scaling_mode),
+           cfg->threads,
+           cfg->work_iters,
+           affinity_to_string(cfg->affinity_enabled),
+           result->time_total,
+           result->checksum,
+           valid);
+}
 
 static void print_final_header(void)
 {
@@ -109,11 +129,23 @@ int main(int argc, char **argv)
     int rc = 0;
     int valid;
     const char *notes = "ok";
+    IdealResult ideal_result;
 
     config_set_defaults(&cfg);
     if (cli_parse_args(argc, argv, &cfg) != 0) {
         cli_print_usage(stderr, argv[0]);
         return 2;
+    }
+
+    if (cfg.mode == MODE_IDEAL) {
+        rc = run_ideal_benchmark(&cfg, &ideal_result, &metrics);
+        if (rc != 0) {
+            fprintf(stderr, "ideal benchmark failed\n");
+            return 1;
+        }
+        print_ideal_header();
+        print_ideal_row(&cfg, &ideal_result);
+        return ideal_result.checksum != 0ULL ? 0 : 1;
     }
 
     switch (cfg.mode) {
@@ -136,6 +168,8 @@ int main(int argc, char **argv)
         break;
     case MODE_HYBRID:
         rc = run_hybrid_mode(&cfg, &result, &metrics);
+        break;
+    case MODE_IDEAL:
         break;
     }
 
