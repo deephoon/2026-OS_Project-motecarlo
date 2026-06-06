@@ -6,7 +6,26 @@
 
 `pthread` · `fork()` · `waitpid()` · `pipe` · `mmap shared memory` · `mutex` · `condition variable` · `task queue` · `local reduce` · `interactive merge` · `CPU affinity`
 
+최종 검증 요약:
+
+- 실제 Monte Carlo `120,000,000 trials`, `steps=50`, 각 case 5회 반복
+- 정상 mode 전체 `valid=1`, 동일 checksum
+- 4-worker 주요 구조 efficiency `92.5~94.0%`
+- 4-worker 주요 구조 worker당 CPU utilization `99.2~99.8%`
+- affinity 대상 core 최소 utilization `99.7%`
+
 ---
+
+## 문서 안내
+
+| 확인할 내용 | 위치 |
+| --- | --- |
+| 프로젝트가 왜 시작되었고 어떻게 바뀌었는가 | [프로젝트 개요](#프로젝트-개요), [프로젝트 변화 과정](#프로젝트-변화-과정) |
+| 최종 실행 구조가 어떻게 동작하는가 | [시스템 구조](#시스템-구조), [실행 모드](#실행-모드) |
+| OS 개념이 코드에 어떻게 적용되었는가 | [Synchronization 설계](#synchronization-설계), [IPC 설계](#ipc-설계), [Scheduling과 Workload](#scheduling과-workload) |
+| 실제 성능과 정확성이 어떻게 검증되었는가 | [최종 실제 Monte Carlo 결과](#최종-실제-monte-carlo-결과) |
+| 프로젝트를 직접 실행하는 방법 | [빠른 실행](#빠른-실행), [실험 재현](#실험-재현), [SUBMISSION.md](SUBMISSION.md) |
+| 현재 한계와 추가 개선 가능성 | [남아 있는 한계와 개선 방향](#남아-있는-한계와-개선-방향) |
 
 ## 프로젝트 개요
 
@@ -25,6 +44,16 @@
 IPC 비용과 확장성이 어떻게 달라지는가?
 ```
 
+차량 추종 Monte Carlo simulation을 workload로 선택한 이유는 다음과 같습니다.
+
+- 각 trial을 독립적으로 계산할 수 있어 worker 수와 실행 구조를 자유롭게 바꿀 수 있습니다.
+- time step 수와 trial 수로 CPU 계산량을 조절할 수 있습니다.
+- deterministic seed를 사용해 병렬 실행의 정확성을 checksum으로 검증할 수 있습니다.
+- 결과 histogram을 공유하거나 병합하는 과정에서 synchronization과 reduce 구조를 비교할 수 있습니다.
+- 충분히 큰 실제 simulation을 사용해 strong scaling과 core utilization을 측정할 수 있습니다.
+
+이 프로젝트의 목표는 특정 mode가 항상 가장 빠르다고 주장하는 것이 아닙니다. 동일한 계산에서 process, thread, synchronization, IPC, scheduling 구조가 정확성과 성능에 주는 영향을 재현하고, 그 차이를 측정 가능한 근거로 설명하는 것이 목표입니다.
+
 지원 실행 모드:
 
 | Mode | 실행 구조 | 주요 비교 대상 |
@@ -36,6 +65,8 @@ IPC 비용과 확장성이 어떻게 달라지는가?
 | `pipeline` | task queue + worker pool | 동적 scheduling, queue overhead |
 
 CPU 활용률과 strong scaling은 별도 인공 loop가 아니라 실제 Monte Carlo workload로 검증합니다. 실제 계산에서 4-worker efficiency `92.5~94.0%`, worker당 CPU 활용률 `99.2~99.8%`를 확보했기 때문에 별도의 `ideal` mode는 제거했습니다.
+
+처음 실행하는 경우 [SUBMISSION.md](SUBMISSION.md)의 순서대로 빌드와 smoke test를 수행하면 됩니다. 이 README는 프로젝트가 현재 구조로 발전한 과정, 최종 설계, 실험 방법과 검증 결과를 설명합니다.
 
 ### 운영체제 핵심 요구사항 대응
 
@@ -52,16 +83,242 @@ CPU 활용률과 strong scaling은 별도 인공 loop가 아니라 실제 Monte 
 | Strong scaling | 고정된 실제 Monte Carlo workload | 4-worker efficiency `92.5~94.0%` |
 | 정확성 검증 | `valid`, `hist_sum`, deterministic checksum | 정상 mode 전체 checksum 일치 |
 
-### 문제 해결 흐름
+---
 
-| 발견한 문제 | 원인 | 적용한 개선 | 검증 결과 |
-| --- | --- | --- | --- |
-| shared result를 보호하지 않으면 결과 손상 | data race와 lost update | mutex 및 worker-local reduce 구현 | `nosync valid=0`, mutex/reduce `valid=1` |
-| trial마다 mutex를 잡으면 느림 | hot loop lock contention | local result를 join 이후 병합 | hybrid reduce가 mutex보다 약 1.95배 빠름 |
-| process 결과 전달 비용 | fork와 IPC, 잦은 전달 가능성 | child-local 계산 후 마지막에 결과 1회 전달 | process 4 shm efficiency `94.0%` |
-| hybrid worker affinity 중복 | child별 thread ID가 다시 0부터 시작 | 전역 worker ID로 core mapping | 4-worker Util/Core `99.2%` |
-| 단순 static partition만으로 scheduling 비교가 약함 | 균등 trial은 load imbalance가 작음 | skewed workload와 queue pipeline 추가 | static/queue 비교 가능 |
-| final reduce만으로 중간 집계 불가 | worker 종료 전 결과가 보이지 않음 | merge queue와 aggregator thread 추가 | interactive 기능과 overhead 비교 가능 |
+## 프로젝트 변화 과정
+
+이 프로젝트는 처음부터 현재 구조로 설계된 것이 아닙니다. 최초에는 독립적인 Monte Carlo trial을 여러 thread로 나누는 비교적 단순한 병렬 프로그램이었습니다. 이후 정확성 문제, lock contention, process 간 결과 전달, 동적 scheduling, 중간 결과 집계, core 활용률 검증 문제를 순서대로 발견하고 구조를 확장했습니다.
+
+전체 변화의 핵심은 다음과 같습니다.
+
+```text
+단순 Sequential / Thread 비교
+  -> shared result race condition 발견
+  -> mutex로 정확성 회복
+  -> mutex contention 발견
+  -> worker-local reduce 적용
+  -> process + IPC 비교 추가
+  -> process 내부 thread를 사용하는 hybrid 추가
+  -> queue 기반 pipeline과 interactive merge 추가
+  -> stage metrics, skewed workload, profile 비교 추가
+  -> CPU affinity, strong scaling, core별 utilization 검증
+  -> 실제 Monte Carlo 자체가 4-core를 거의 포화하도록 최종 실험 확정
+```
+
+### 변화 요약
+
+| 단계 | 당시 문제 | 원인 분석 | 구현 변경 | 검증 결과 |
+| --- | --- | --- | --- | --- |
+| 1. 기준 구현 | 병렬 성능을 비교할 기준이 없음 | 기준시간과 기준 결과 부재 | deterministic sequential Monte Carlo 구현 | 모든 정상 mode가 비교할 baseline 확보 |
+| 2. 초기 thread | shared result 값이 실행마다 달라짐 | 여러 thread의 동시 update로 data race 발생 | `nosync`, `mutex`, `reduce` 비교 구조 구현 | `nosync valid=0`, mutex/reduce `valid=1` |
+| 3. Local reduce | mutex가 정확하지만 느림 | trial hot loop에서 반복 lock contention | worker별 local result 후 마지막 병합 | hybrid reduce가 mutex보다 약 `1.95x` 빠름 |
+| 4. Process / IPC | thread 비교만으로 주소 공간 격리와 IPC를 설명할 수 없음 | process는 결과 공유에 IPC 필요 | `fork()`, `waitpid()`, pipe, shared memory 추가 | process 4 shm efficiency `94.0%` |
+| 5. Hybrid | process와 thread를 분리해서만 비교함 | 실제 시스템은 두 구조를 계층적으로 조합 가능 | child process 내부 pthread worker 구현 | hybrid 2x2 shm efficiency `94.0%` |
+| 6. Pipeline | static partition은 균등 workload에서 너무 쉽게 동작 | 동적 작업 배분과 producer-consumer 구조 부재 | task queue, mutex, condition variable 추가 | queue scheduling과 wait overhead 측정 가능 |
+| 7. Interactive merge | final reduce는 모든 worker 종료 전 결과를 볼 수 없음 | 중간 결과 전달 경로 부재 | merge queue와 aggregator thread 추가 | final/interactive 기능 및 비용 비교 가능 |
+| 8. 현실적 workload | 균등 trial만으로 load imbalance 분석이 약함 | worker별 작업량 차이가 거의 없음 | skewed workload와 workload profile 추가 | static/queue 및 process/thread 특성 비교 가능 |
+| 9. 측정 신뢰도 | 짧은 실행과 전체 시간만으로 원인 분석이 어려움 | OS noise와 내부 overhead가 분리되지 않음 | stage metrics, counters, 5회 반복 자동화 | 정확성, scaling, sync, IPC 근거 확보 |
+| 10. Core 검증 | CPU%가 높아도 core를 균일하게 쓰는지 불명확 | scheduler 배치와 hybrid affinity 중복 가능 | Linux affinity, 전역 worker ID, `mpstat` 측정 | 4-worker Util/Core `99.2~99.8%` |
+| 11. 최종 구조 확정 | 별도 인공 CPU benchmark가 실제 프로젝트를 대표하지 못함 | 실제 Monte Carlo가 아닌 loop의 수치는 구조 검증과 분리됨 | 인공 `ideal` mode 제거, 실제 Monte Carlo 계산량 확대 | 실제 workload에서 4-worker efficiency `92.5~94.0%` |
+
+### 1단계: 재현 가능한 Sequential Baseline
+
+첫 구현의 목적은 빠른 병렬 프로그램을 만드는 것이 아니라, 어떤 실행 구조에서도 같은 결과를 만들어야 하는 기준 계산을 확보하는 것이었습니다.
+
+각 trial은 trial index로부터 deterministic seed를 만들고, 차량 속도, 차간 거리, 반응시간, 감속력을 생성합니다. 이후 여러 time step 동안 위치와 속도를 계산하고, 최소 TTC와 충돌 여부를 risk histogram에 한 번 반영합니다.
+
+```text
+고정된 trial index
+  -> 고정된 seed
+  -> 고정된 차량 상태
+  -> 고정된 risk result
+  -> 고정된 checksum
+```
+
+이 설계 덕분에 worker 수나 실행 순서가 달라져도 정상 mode의 결과는 같아야 합니다. 현재 검증 기준은 다음 세 가지입니다.
+
+- `hist_sum == trials`
+- `valid == 1`
+- sequential baseline과 checksum 일치
+
+### 2단계: Thread 병렬화와 Race Condition 재현
+
+초기 병렬화는 trial range를 여러 pthread에 정적으로 나누는 구조였습니다. Trial 자체는 독립적이지만 모든 worker가 하나의 shared histogram과 collision count를 수정하면서 data race가 발생했습니다.
+
+이를 숨기지 않고 세 가지 synchronization 방식을 실행 옵션으로 분리했습니다.
+
+```text
+nosync: 보호 없이 shared result 수정
+mutex : shared result 수정마다 lock
+reduce: worker-local result 계산 후 join 이후 병합
+```
+
+`nosync`는 실행시간만 보면 빠르게 보일 수 있지만 lost update 때문에 `hist_sum`과 checksum이 깨집니다. 따라서 이 mode는 사용할 수 있는 최적화가 아니라, synchronization이 필요한 이유를 재현하는 비교 조건입니다.
+
+### 3단계: Mutex의 한계와 Local Reduce
+
+Mutex를 사용하면 정확성은 회복되지만 trial마다 lock을 획득하므로 계산의 hot loop가 직렬화됩니다. Worker 수가 늘어도 shared result lock을 기다리는 시간이 증가해 병렬화 이득이 감소합니다.
+
+이를 해결하기 위해 각 worker가 독립적인 `Result`를 계산하고, worker 종료 이후 한 번만 병합하는 local reduce를 구현했습니다.
+
+```text
+기존 mutex 방식
+trial -> lock -> shared update -> unlock -> 반복
+
+개선된 reduce 방식
+worker -> local result 계산 -> join -> result merge 1회
+```
+
+최신 hybrid synchronization 실험에서 mutex와 reduce 모두 `valid=1`과 동일 checksum을 유지했지만, reduce는 mutex보다 약 `1.95x` 빠르게 측정되었습니다. 현재 thread와 hybrid의 기본 synchronization 전략은 reduce입니다.
+
+### 4단계: Process와 IPC 추가
+
+Thread만으로는 같은 주소 공간을 공유하지 않는 실행 구조와 IPC 비용을 비교할 수 없습니다. 이를 위해 parent가 여러 child process를 생성하고 trial range를 나누는 process mode를 추가했습니다.
+
+초기 설계에서 가장 중요한 결정은 **결과를 trial마다 전달하지 않는 것**이었습니다. 각 child는 자기 범위 전체를 local result로 계산한 뒤, 마지막에 완성된 결과를 parent에게 한 번만 전달합니다.
+
+```text
+Parent
+  -> fork children
+  -> child-local Monte Carlo 계산
+  -> 완성된 Result 1회 전달
+  -> waitpid
+  -> parent merge
+```
+
+지원 IPC:
+
+- `pipe`: child가 `write()`, parent가 `read()`로 결과 전달
+- `shm`: anonymous `mmap`으로 child별 독립 result slot 제공
+
+Shared memory에서는 child마다 자기 slot만 쓰고 parent는 `waitpid()` 이후 읽습니다. 따라서 같은 slot에 대한 동시 write, busy waiting, hot path lock이 없습니다.
+
+### 5단계: Process와 Thread를 결합한 Hybrid
+
+Process와 thread를 별도로 비교한 뒤, 두 구조를 계층적으로 결합한 hybrid mode를 추가했습니다.
+
+```text
+Parent process
+  -> Child process 0
+       -> pthread workers
+       -> child-local reduce
+       -> IPC result 전달
+  -> Child process 1
+       -> pthread workers
+       -> child-local reduce
+       -> IPC result 전달
+  -> Parent merge
+```
+
+Hybrid는 process 단위의 독립 주소 공간과 process 내부 thread의 shared address space를 함께 사용합니다. 또한 child 내부 synchronization을 `nosync`, `mutex`, `reduce`로 바꿀 수 있어 동일한 계층 구조에서 race condition과 해결 방식을 직접 비교할 수 있습니다.
+
+### 6단계: Static Partition에서 Queue Pipeline으로
+
+균등한 Monte Carlo trial은 static partition만으로도 잘 분배됩니다. 하지만 이 조건만으로는 scheduling 정책, producer-consumer, queue 동기화의 필요성을 확인하기 어렵습니다.
+
+이를 위해 작업을 batch로 분할하고 bounded task queue를 통해 worker가 가져가는 pipeline mode를 구현했습니다.
+
+```text
+Preprocessor
+  -> TaskQueue
+  -> Worker Pool
+  -> Result Merge
+```
+
+Queue의 `head`, `tail`, `count`, `closed`는 mutex로 보호합니다. Mutex만으로는 queue empty/full 상태에서 효율적인 대기와 wake-up을 표현할 수 없으므로 `not_empty`, `not_full` condition variable을 함께 사용합니다.
+
+이 구조는 균등 workload에서는 queue overhead 때문에 static partition보다 느릴 수 있습니다. 반대로 작업량이 불균등하면 worker가 다음 batch를 동적으로 가져갈 수 있어 load balancing에 유리할 수 있습니다.
+
+### 7단계: Final Reduce에서 Interactive Merge로
+
+Final reduce는 빠르고 단순하지만 모든 worker가 끝날 때까지 partial result가 병합되지 않습니다. 실행 중 결과를 계속 집계할 수 있는 구조를 확인하기 위해 merge queue와 aggregator thread를 추가했습니다.
+
+```text
+Final
+Workers -> 종료 -> 한 번에 병합
+
+Interactive
+Workers -> partial result -> MergeQueue -> Aggregator
+```
+
+Interactive merge는 queue operation, mutex, condition variable, aggregator scheduling 비용이 추가됩니다. 따라서 작은 workload에서 final reduce보다 느린 것은 정상적인 trade-off입니다. 이 기능의 목적은 무조건 빠른 구조를 만드는 것이 아니라, 중간 집계 기능을 얻을 때 발생하는 OS overhead를 측정하는 것입니다.
+
+### 8단계: Pre/Post Stage, Skewed Workload, Profile
+
+초기 구조는 프로그램 시작 직후 바로 독립 trial을 병렬 처리할 수 있어 순차 구간과 작업 불균형이 거의 보이지 않았습니다. 이를 보완하기 위해 다음 진단 옵션을 추가했습니다.
+
+- `--pre-work`, `--post-work`: 병렬 계산 전후의 순차 작업량 조절
+- `--workload skewed`: 일부 trial에 추가 계산을 부여해 load imbalance 생성
+- `--profile process_friendly`: 큰 독립 작업과 결과 1회 전달 강조
+- `--profile thread_friendly`: thread-local reduce의 낮은 overhead 강조
+- `--inner-work`: 결과를 바꾸지 않는 추가 CPU 계산량 조절
+
+추가 CPU work는 계산량만 바꾸며 result update는 trial당 정확히 한 번만 수행합니다. 따라서 workload 조건이 달라져도 `hist_sum`, `valid`, checksum 검증은 유지됩니다.
+
+같은 profile을 process와 thread 양쪽에서 실행한 결과, process-friendly에서는 두 구조의 차이가 작아졌고 thread-friendly에서는 thread 4 reduce가 process 4 shm보다 약 `5.7%` 빨랐습니다. 이는 특정 실행 구조가 항상 우월한 것이 아니라 작업 크기와 overhead 비율에 따라 선택이 달라짐을 보여줍니다.
+
+### 9단계: Stage Metrics와 자동 검증
+
+전체 실행시간만 측정하면 느려진 원인이 계산, synchronization, IPC, merge 중 무엇인지 구분하기 어렵습니다. 이를 위해 다음 metrics와 counters를 CSV에 추가했습니다.
+
+```text
+T_total, T_pre, T_compute, T_sync, T_ipc, T_merge, T_post
+lock_wait_count, cond_wait_count
+queue_push_count, queue_pop_count
+ipc_write_count, ipc_read_count, ipc_bytes
+```
+
+`T_total`은 end-to-end wall-clock 시간입니다. 반면 `T_sync`는 여러 worker에서 관측한 lock/condition wait의 누적값일 수 있으므로 `T_total`과 직접 더하는 값이 아니라 synchronization 부담을 비교하는 지표입니다.
+
+검증 과정도 자동화했습니다.
+
+- `make test`: 대표 정상 mode 8개의 `valid`와 checksum 비교
+- scaling script: worker 수별 반복 실행과 GNU time 수집
+- utilization script: `mpstat -P ALL`과 GNU time 수집
+- synchronization script: nosync/mutex/reduce 정확성 및 성능 비교
+- profile script: 동일 workload를 process/thread/hybrid에서 교차 실행
+
+### 10단계: CPU Affinity와 Core별 Utilization
+
+높은 CPU%만으로는 worker가 여러 core에 균일하게 배치되었는지 알 수 없습니다. Linux CPU affinity를 추가하고 `mpstat -P ALL`로 core별 utilization을 측정했습니다.
+
+특히 hybrid에서는 각 child 내부 thread ID가 다시 0부터 시작하기 때문에 단순히 thread ID만 사용하면 여러 child의 thread가 같은 core에 중복 배치될 수 있습니다. 이를 다음 전역 worker ID로 수정했습니다.
+
+```text
+global_worker_id = process_id * threads_per_process + thread_id
+```
+
+Affinity 적용이 제한된 Docker, WSL2, 비 Linux 환경에서도 프로그램이 종료되지 않도록 warning 후 계속 실행하도록 구현했습니다.
+
+최신 4-worker 실제 Monte Carlo 측정에서 대표 구조의 worker당 CPU utilization은 `99.2~99.8%`, affinity 대상 core의 최소 utilization은 `99.7%`, 최대 표준편차는 `0.16`이었습니다.
+
+### 11단계: 인공 Ideal Mode 제거와 실제 Monte Carlo 중심 검증
+
+한때 lock, IPC, queue를 제거한 별도 인공 CPU loop를 사용해 core saturation 상한을 확인하는 `ideal` benchmark를 추가했습니다. 하지만 이 결과는 실제 차량 추종 Monte Carlo 구조의 성능을 직접 증명하지 못한다는 한계가 있었습니다.
+
+최종 단계에서는 별도 `ideal` mode를 제거하고 실제 Monte Carlo workload 자체를 충분히 크게 실행했습니다. 동일한 실제 계산에서 worker 수만 바꾸는 strong scaling과 core별 utilization을 측정해 다음 결과를 확보했습니다.
+
+- 4-worker 주요 구조 efficiency: `92.5~94.0%`
+- 4-worker 주요 구조 Util/Worker: `99.2~99.8%`
+- affinity 대상 core 최소 utilization: `99.7%`
+- 모든 정상 mode: `valid=1`, 동일 checksum
+
+현재 프로젝트의 핵심 성능 근거는 인공 loop가 아니라 실제 Monte Carlo simulation입니다.
+
+### 최종적으로 채택한 구조와 이유
+
+| 영역 | 최종 기본 선택 | 선택 이유 |
+| --- | --- | --- |
+| Thread synchronization | local reduce | 정확성을 유지하며 hot loop lock 제거 |
+| Process IPC | shared memory result slots | child별 독립 slot과 결과 1회 전달 |
+| Hybrid 내부 동기화 | child-local reduce | process 내부 mutex contention 최소화 |
+| Pipeline 기본 merge | final | 가장 낮은 병합 overhead |
+| Pipeline 확장 기능 | interactive | 중간 집계가 필요할 때 선택 가능 |
+| 기본 workload | 실제 Monte Carlo `default` | 인공 benchmark가 아닌 실제 계산 검증 |
+| Scaling 기준 | 고정 총 작업량 strong scaling | `T1/N`, speedup, efficiency 직접 비교 |
+| 정확성 기준 | histogram + checksum + valid | 빠르지만 틀린 결과를 배제 |
+
+최종 구조가 하나의 mode만을 정답으로 선택하는 것은 아닙니다. Thread는 낮은 생성 비용과 shared address space가 장점이고, process는 독립 주소 공간과 명확한 결과 격리가 장점이며, hybrid와 pipeline은 더 복잡한 실행 구조와 scheduling 기능을 제공합니다. 이 프로젝트는 동일한 Monte Carlo 계산에서 각 구조의 장점과 비용을 재현하고 측정할 수 있도록 완성되었습니다.
 
 ---
 
@@ -796,8 +1053,6 @@ Docker Desktop은 Linux VM 자원 설정의 영향을 받습니다. Worker scali
 │   ├── run_hybrid_sync.sh
 │   ├── run_profile_compare.sh
 │   └── analyze_profile_compare.py
-├── docs/
-│   └── final_report_draft.md
 ├── results/csv/
 │   ├── real_montecarlo_scaling_2026_06_06_5repeat/
 │   ├── real_montecarlo_utilization_2026_06_06/
@@ -805,7 +1060,8 @@ Docker Desktop은 Linux VM 자원 설정의 영향을 받습니다. Worker scali
 │   └── profile_compare_2026_06_06/
 ├── Makefile
 ├── Dockerfile
-└── docker-compose.yml
+├── docker-compose.yml
+└── SUBMISSION.md
 ```
 
 ---
