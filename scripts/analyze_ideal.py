@@ -6,11 +6,16 @@ import re
 import statistics
 
 
-RAW_PATH = "results/csv/ideal/ideal_strong_raw.csv"
-STRONG_SUMMARY = "results/csv/ideal/ideal_strong_summary.csv"
-UTIL_SUMMARY = "results/csv/ideal/ideal_utilization_summary.csv"
-REPORT_PATH = "docs/ideal_benchmark_report.md"
-CORE_UTIL_DIR = "results/csv/core_util"
+RAW_PATH = os.environ.get("RAW_PATH", "results/csv/ideal/ideal_strong_raw.csv")
+STRONG_SUMMARY = os.environ.get(
+    "STRONG_SUMMARY",
+    "results/csv/ideal/ideal_strong_summary.csv",
+)
+UTIL_SUMMARY = os.environ.get(
+    "UTIL_SUMMARY",
+    "results/csv/ideal/ideal_utilization_summary.csv",
+)
+CORE_UTIL_DIR = os.environ.get("CORE_UTIL_DIR", "results/csv/core_util")
 
 
 def mean(values):
@@ -44,7 +49,7 @@ def analyze_strong():
     os.makedirs(os.path.dirname(STRONG_SUMMARY), exist_ok=True)
     if not os.path.exists(RAW_PATH):
         with open(STRONG_SUMMARY, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
+            writer = csv.writer(f, lineterminator="\n")
             writer.writerow([
                 "threads", "avg_time", "min_time", "stdev_time", "ideal_time",
                 "speedup", "efficiency", "avg_cpu_percent", "avg_util_per_core",
@@ -86,7 +91,7 @@ def analyze_strong():
             "threads", "avg_time", "min_time", "stdev_time", "ideal_time",
             "speedup", "efficiency", "avg_cpu_percent", "avg_util_per_core",
         ]
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=fieldnames, lineterminator="\n")
         writer.writeheader()
         writer.writerows(summary)
     return summary
@@ -102,13 +107,27 @@ def judgement(util):
 
 def analyze_utilization():
     os.makedirs(os.path.dirname(UTIL_SUMMARY), exist_ok=True)
-    rows = []
-    for path in sorted(glob.glob(os.path.join(CORE_UTIL_DIR, "time_threads*.txt"))):
+    grouped = {}
+    patterns = [
+        os.path.join(CORE_UTIL_DIR, "time_threads*.txt"),
+        os.path.join(CORE_UTIL_DIR, "time_ideal_*.txt"),
+    ]
+    paths = []
+    for pattern in patterns:
+        paths.extend(glob.glob(pattern))
+    for path in sorted(set(paths)):
         match = re.search(r"time_threads([0-9]+)\.txt$", path)
+        if not match:
+            match = re.search(r"time_ideal_([0-9]+)\.txt$", path)
         if not match:
             continue
         threads = int(match.group(1))
         cpu_percent = parse_cpu_percent_from_time(path)
+        grouped.setdefault(threads, []).append(cpu_percent)
+
+    rows = []
+    for threads in sorted(grouped):
+        cpu_percent = mean(grouped[threads])
         util = cpu_percent / threads if threads > 0 else 0.0
         rows.append({
             "threads": threads,
@@ -119,75 +138,17 @@ def analyze_utilization():
 
     with open(UTIL_SUMMARY, "w", newline="", encoding="utf-8") as f:
         fieldnames = ["threads", "avg_cpu_percent", "avg_util_per_core", "judgement"]
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=fieldnames, lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
     return rows
 
 
-def write_report(strong_rows, util_rows):
-    os.makedirs(os.path.dirname(REPORT_PATH), exist_ok=True)
-    with open(REPORT_PATH, "w", encoding="utf-8") as f:
-        f.write("# Ideal Benchmark Report\n\n")
-        f.write("## Purpose\n\n")
-        f.write(
-            "The ideal benchmark is not a vehicle simulation. It is a pure CPU-bound "
-            "upper-bound experiment used to check whether N workers can keep N cores busy "
-            "and whether strong scaling approaches T1/N under minimal OS overhead.\n\n"
-        )
-        f.write("## Design\n\n")
-        f.write("- No shared result updates inside the hot loop.\n")
-        f.write("- No pipe, mmap IPC, task queue, merge queue, or repeated printf in workers.\n")
-        f.write("- Each pthread computes an independent deterministic local checksum.\n")
-        f.write("- The main thread joins workers and merges checksums once.\n")
-        f.write("- CPU affinity is attempted on Linux and falls back with a warning if unsupported.\n\n")
-
-        f.write("## Strong Scaling Summary\n\n")
-        if strong_rows:
-            f.write("| Threads | Avg time | Ideal time | Speedup | Efficiency | Avg CPU% | Util/core |\n")
-            f.write("| ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
-            for row in strong_rows:
-                f.write(
-                    f"| {row['threads']} | {row['avg_time']} | {row['ideal_time']} | "
-                    f"{row['speedup']} | {row['efficiency']} | "
-                    f"{row['avg_cpu_percent']} | {row['avg_util_per_core']} |\n"
-                )
-        else:
-            f.write("- No strong scaling raw CSV was found.\n")
-        f.write("\n## CPU Utilization Summary\n\n")
-        if util_rows:
-            f.write("| Threads | Avg CPU% | Avg util/core | Judgement |\n")
-            f.write("| ---: | ---: | ---: | --- |\n")
-            for row in util_rows:
-                f.write(
-                    f"| {row['threads']} | {row['avg_cpu_percent']} | "
-                    f"{row['avg_util_per_core']} | {row['judgement']} |\n"
-                )
-        else:
-            f.write("- No core utilization time files were found.\n")
-        f.write("\n## Interpretation For Final Report\n\n")
-        f.write(
-            "Use ideal mode as the upper bound: it removes synchronization, IPC, queueing, "
-            "and merge overhead from the hot path. Then compare it with real simulation "
-            "modes, where pthread mutexes, condition variables, fork/waitpid, pipe or shared "
-            "memory result transfer, and merge strategy reduce efficiency.\n\n"
-        )
-        f.write("## Environment Caveat\n\n")
-        f.write(
-            "Docker Desktop and WSL2 run through a VM layer, and native Linux can differ by "
-            "CPU model, core count, scheduler state, CPU governor, and background load. Do "
-            "not claim universal 100% utilization; claim that the project creates an ideal "
-            "condition and compares it with real OS-structured simulation modes.\n"
-        )
-
-
 def main():
-    strong_rows = analyze_strong()
-    util_rows = analyze_utilization()
-    write_report(strong_rows, util_rows)
+    analyze_strong()
+    analyze_utilization()
     print(f"wrote {STRONG_SUMMARY}")
     print(f"wrote {UTIL_SUMMARY}")
-    print(f"wrote {REPORT_PATH}")
 
 
 if __name__ == "__main__":

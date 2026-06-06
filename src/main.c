@@ -40,7 +40,8 @@ static void print_final_header(void)
          "compute_ratio,sync_overhead_ratio,ipc_overhead_ratio,merge_overhead_ratio,"
          "throughput_batches_per_sec,total_trials,collision_count,hist_sum,"
          "checksum,valid,lock_wait_count,cond_wait_count,queue_push_count,"
-         "queue_pop_count,ipc_write_count,ipc_read_count,ipc_bytes,notes");
+         "queue_pop_count,ipc_write_count,ipc_read_count,ipc_bytes,notes,"
+         "profile,inner_work");
 }
 
 static void print_final_row(const Config *cfg, const StageMetrics *m,
@@ -57,7 +58,7 @@ static void print_final_row(const Config *cfg, const StageMetrics *m,
     printf("%s,%s,%s,%s,%d,%d,%ld,%d,%d,%d,%s,%s,%d,%d,%d,"
            "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,"
            "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%ld,%ld,%ld,%lu,%d,"
-           "%lu,%lu,%lu,%lu,%lu,%lu,%lu,%s\n",
+           "%lu,%lu,%lu,%lu,%lu,%lu,%lu,%s,%s,%lld\n",
            run_mode_to_string(cfg->mode),
            schedule_mode_to_string(cfg->schedule_mode),
            merge_mode_to_string(cfg->merge_mode),
@@ -100,19 +101,22 @@ static void print_final_row(const Config *cfg, const StageMetrics *m,
            m->ipc_write_count,
            m->ipc_read_count,
            m->ipc_bytes,
-           notes);
+           notes,
+           profile_to_string(cfg->profile),
+           cfg->inner_work);
 }
 
 static void print_verbose_summary(const Config *cfg, const Result *r,
                                   const StageMetrics *m, int valid)
 {
-    fprintf(stderr, "mode=%s schedule=%s merge=%s sync=%s ipc=%s workload=%s\n",
+    fprintf(stderr, "mode=%s schedule=%s merge=%s sync=%s ipc=%s workload=%s profile=%s\n",
             run_mode_to_string(cfg->mode),
             schedule_mode_to_string(cfg->schedule_mode),
             merge_mode_to_string(cfg->merge_mode),
             sync_mode_to_string(cfg->sync_mode),
             ipc_mode_to_string(cfg->ipc_mode),
-            workload_mode_to_string(cfg->workload_mode));
+            workload_mode_to_string(cfg->workload_mode),
+            profile_to_string(cfg->profile));
     fprintf(stderr, "total=%.6f pre=%.6f compute=%.6f sync=%.6f ipc=%.6f merge=%.6f post=%.6f\n",
             metrics_total(m), m->t_pre, m->t_compute, m->t_sync,
             m->t_ipc, m->t_merge, m->t_post);
@@ -136,6 +140,7 @@ int main(int argc, char **argv)
         cli_print_usage(stderr, argv[0]);
         return 2;
     }
+    config_apply_profile_defaults(&cfg);
 
     if (cfg.mode == MODE_IDEAL) {
         rc = run_ideal_benchmark(&cfg, &ideal_result, &metrics);

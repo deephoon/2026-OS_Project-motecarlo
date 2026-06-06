@@ -1,5 +1,6 @@
 #include "hybrid_mode.h"
 
+#include "affinity.h"
 #include "ipc.h"
 #include "ipc_shm.h"
 #include "postprocess.h"
@@ -12,6 +13,8 @@
 #include <unistd.h>
 
 typedef struct {
+    int process_id;
+    int thread_id;
     const Config *cfg;
     long start_idx;
     long end_idx;
@@ -21,6 +24,13 @@ typedef struct {
 static void *hybrid_thread_worker(void *arg_ptr)
 {
     HybridThreadArg *arg = (HybridThreadArg *)arg_ptr;
+    if (arg->cfg->affinity_enabled) {
+        int worker_id = arg->process_id * arg->cfg->threads + arg->thread_id;
+        int core_count = arg->cfg->core_count > 0 ?
+                         arg->cfg->core_count :
+                         arg->cfg->processes * arg->cfg->threads;
+        (void)pin_current_to_core(worker_id % core_count);
+    }
     result_init(&arg->local);
     for (long i = arg->start_idx; i < arg->end_idx; ++i) {
         int collided = 0;
@@ -40,8 +50,8 @@ static void hybrid_partition(long trials, int processes, int pid,
     *end_idx = *start_idx + base + (pid < rem ? 1 : 0);
 }
 
-static int run_child_thread_group(const Config *cfg, long start_idx, long end_idx,
-                                  Result *out)
+static int run_child_thread_group(const Config *cfg, int process_id,
+                                  long start_idx, long end_idx, Result *out)
 {
     pthread_t *threads = 0;
     HybridThreadArg *args = 0;
@@ -61,6 +71,8 @@ static int run_child_thread_group(const Config *cfg, long start_idx, long end_id
         long base = trials / cfg->threads;
         long rem = trials % cfg->threads;
         long extra_before = i < rem ? i : rem;
+        args[i].process_id = process_id;
+        args[i].thread_id = i;
         args[i].cfg = cfg;
         args[i].start_idx = start_idx + (long)i * base + extra_before;
         args[i].end_idx = args[i].start_idx + base + (i < rem ? 1 : 0);
@@ -93,6 +105,8 @@ int run_hybrid_mode(const Config *cfg, Result *out, StageMetrics *metrics)
     int failed = 0;
     double start;
     double end;
+    double compute_wall_start;
+    double compute_wall_end;
     PostSummary summary;
 
     if (cfg == 0 || out == 0 || metrics == 0 || cfg->processes <= 0) {
@@ -121,6 +135,7 @@ int run_hybrid_mode(const Config *cfg, Result *out, StageMetrics *metrics)
     end = now_sec();
     metrics->t_pre = elapsed_sec(start, end);
 
+    compute_wall_start = now_sec();
     for (int i = 0; i < cfg->processes; ++i) {
         if (cfg->ipc_mode == IPC_PIPE && pipe(pipes[i]) != 0) {
             failed = 1;
@@ -136,6 +151,10 @@ int run_hybrid_mode(const Config *cfg, Result *out, StageMetrics *metrics)
             long e;
             Result local;
             Config child_cfg = *cfg;
+            int core_count = cfg->core_count > 0 ? cfg->core_count : cfg->processes;
+            if (cfg->affinity_enabled) {
+                (void)pin_current_to_core(i % core_count);
+            }
             if (cfg->ipc_mode == IPC_PIPE) {
                 close(pipes[i][0]);
             }
@@ -144,11 +163,14 @@ int run_hybrid_mode(const Config *cfg, Result *out, StageMetrics *metrics)
              * runs a process-local pthread reduce over global trial indices.
              * The parent only merges IPC results. A later version can add
              * process-local queue scheduling. */
-            run_child_thread_group(&child_cfg, s, e, &local);
+            run_child_thread_group(&child_cfg, i, s, e, &local);
             if (cfg->ipc_mode == IPC_PIPE) {
                 ipc_write_result(pipes[i][1], &local);
                 close(pipes[i][1]);
             } else {
+                /* Each child owns one shared-memory result slot. The parent
+                 * reads after waitpid(), so this handoff avoids shared writes
+                 * in the hot path and does not require locking. */
                 shm_write_result(&shm_table, i, &local);
             }
             _exit(0);
@@ -160,14 +182,16 @@ int run_hybrid_mode(const Config *cfg, Result *out, StageMetrics *metrics)
     for (int i = 0; i < cfg->processes; ++i) {
         if (pids[i] > 0) {
             int status;
-            double wait_start = now_sec();
             if (waitpid(pids[i], &status, 0) < 0 || !WIFEXITED(status) ||
                 WEXITSTATUS(status) != 0) {
                 failed = 1;
             }
-            metrics->t_sync += elapsed_sec(wait_start, now_sec());
         }
     }
+    compute_wall_end = now_sec();
+    /* The parent blocks while child processes and their pthread workers run.
+     * This fork-to-reap wall interval is the hybrid parallel compute stage. */
+    metrics->t_compute = elapsed_sec(compute_wall_start, compute_wall_end);
     if (cfg->ipc_mode == IPC_PIPE) {
         for (int i = 0; i < cfg->processes; ++i) {
             Result child_result;
@@ -216,13 +240,6 @@ int run_hybrid_mode(const Config *cfg, Result *out, StageMetrics *metrics)
     metrics->t_post = elapsed_sec(start, end);
     metrics->processed_batches = cfg->processes;
     metrics->t_total_end = now_sec();
-    metrics->t_compute = metrics_total(metrics) - metrics->t_pre -
-                         metrics->t_sync - metrics->t_ipc - metrics->t_merge -
-                         metrics->t_post;
-    if (metrics->t_compute < 0.0) {
-        metrics->t_compute = 0.0;
-    }
-
     free(pipes);
     free(pids);
     shm_result_table_destroy(&shm_table);

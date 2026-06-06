@@ -2,7 +2,13 @@
 set -eu
 
 THREADS=${THREADS:-4}
+PROCESSES=${PROCESSES:-4}
 WORK_ITERS=${WORK_ITERS:-2000000000}
+MODE=${MODE:-ideal}
+PROFILE=${PROFILE:-default}
+TRIALS=${TRIALS:-1000000}
+STEPS=${STEPS:-100}
+IPC=${IPC:-shm}
 OUT_DIR=${OUT_DIR:-results/csv/core_util}
 TIME_BIN=${TIME_BIN:-/usr/bin/time}
 TIME_FLAG="-v"
@@ -16,9 +22,15 @@ if ! "$TIME_BIN" -v true >/dev/null 2>/dev/null; then
     TIME_FLAG=""
 fi
 
-SIM_OUT="$OUT_DIR/sim_threads${THREADS}.csv"
-TIME_OUT="$OUT_DIR/time_threads${THREADS}.txt"
-MPSTAT_OUT="$OUT_DIR/mpstat_threads${THREADS}.txt"
+if [ "$MODE" = "ideal" ] || [ "$MODE" = "thread" ]; then
+    N=$THREADS
+else
+    N=$PROCESSES
+fi
+
+SIM_OUT="$OUT_DIR/sim_${MODE}_${N}.csv"
+TIME_OUT="$OUT_DIR/time_${MODE}_${N}.txt"
+MPSTAT_OUT="$OUT_DIR/mpstat_${MODE}_${N}.txt"
 
 MPSTAT_PID=""
 if command -v mpstat >/dev/null 2>&1; then
@@ -29,13 +41,52 @@ else
     printf 'mpstat not available\n' > "$MPSTAT_OUT"
 fi
 
-"$TIME_BIN" $TIME_FLAG ./sim \
-    --mode ideal \
-    --scaling utilization \
-    --threads "$THREADS" \
-    --work-iters "$WORK_ITERS" \
-    --affinity on \
-    > "$SIM_OUT" 2> "$TIME_OUT"
+if [ "$MODE" = "ideal" ]; then
+    "$TIME_BIN" $TIME_FLAG ./sim \
+        --mode ideal \
+        --scaling utilization \
+        --threads "$THREADS" \
+        --work-iters "$WORK_ITERS" \
+        --affinity on \
+        > "$SIM_OUT" 2> "$TIME_OUT"
+elif [ "$MODE" = "process" ]; then
+    "$TIME_BIN" $TIME_FLAG ./sim \
+        --mode process \
+        --processes "$PROCESSES" \
+        --ipc "$IPC" \
+        --profile "$PROFILE" \
+        --trials "$TRIALS" \
+        --steps "$STEPS" \
+        --affinity on \
+        --metrics-detail 1 \
+        > "$SIM_OUT" 2> "$TIME_OUT"
+elif [ "$MODE" = "thread" ]; then
+    "$TIME_BIN" $TIME_FLAG ./sim \
+        --mode thread \
+        --threads "$THREADS" \
+        --sync reduce \
+        --profile "$PROFILE" \
+        --trials "$TRIALS" \
+        --steps "$STEPS" \
+        --affinity on \
+        --metrics-detail 1 \
+        > "$SIM_OUT" 2> "$TIME_OUT"
+elif [ "$MODE" = "hybrid" ]; then
+    "$TIME_BIN" $TIME_FLAG ./sim \
+        --mode hybrid \
+        --processes "$PROCESSES" \
+        --threads "$THREADS" \
+        --ipc "$IPC" \
+        --profile "$PROFILE" \
+        --trials "$TRIALS" \
+        --steps "$STEPS" \
+        --affinity on \
+        --metrics-detail 1 \
+        > "$SIM_OUT" 2> "$TIME_OUT"
+else
+    printf 'unsupported MODE=%s; use ideal, process, thread, or hybrid\n' "$MODE" >&2
+    exit 2
+fi
 
 if [ -n "$MPSTAT_PID" ]; then
     kill "$MPSTAT_PID" >/dev/null 2>&1 || true

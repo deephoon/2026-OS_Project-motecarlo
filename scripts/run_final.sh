@@ -12,14 +12,13 @@ POST_WORK=${POST_WORK:-10000}
 OUT_DIR=${OUT_DIR:-results/csv}
 RAW_OUT=${RAW_OUT:-$OUT_DIR/final_raw.csv}
 ANALYZED_OUT=${ANALYZED_OUT:-$OUT_DIR/final_analyzed.csv}
-SUMMARY_OUT=${SUMMARY_OUT:-$OUT_DIR/final_summary.md}
 
 make clean
 make
 
 mkdir -p "$OUT_DIR" results/raw
 
-HEADER='case_name,repeat,mode,schedule,merge,sync,processes,threads,trials,steps,batch_size,queue_size,ipc,workload,skew_factor,pre_work,post_work,time_total,time_pre,time_compute,time_sync,time_ipc,time_merge,time_post,speedup,efficiency,sequential_fraction_estimate,compute_ratio,sync_overhead_ratio,ipc_overhead_ratio,merge_overhead_ratio,throughput_batches_per_sec,total_trials,collision_count,hist_sum,checksum,valid,lock_wait_count,cond_wait_count,queue_push_count,queue_pop_count,ipc_write_count,ipc_read_count,ipc_bytes,notes'
+HEADER='case_name,repeat,mode,schedule,merge,sync,processes,threads,trials,steps,batch_size,queue_size,ipc,workload,skew_factor,pre_work,post_work,time_total,time_pre,time_compute,time_sync,time_ipc,time_merge,time_post,speedup,efficiency,sequential_fraction_estimate,compute_ratio,sync_overhead_ratio,ipc_overhead_ratio,merge_overhead_ratio,throughput_batches_per_sec,total_trials,collision_count,hist_sum,checksum,valid,lock_wait_count,cond_wait_count,queue_push_count,queue_pop_count,ipc_write_count,ipc_read_count,ipc_bytes,notes,profile,inner_work'
 printf '%s\n' "$HEADER" > "$RAW_OUT"
 
 run_case() {
@@ -79,9 +78,8 @@ for repeat in $(seq 1 "$REPEATS"); do
 done
 
 if command -v python3 >/dev/null 2>&1; then
-    python3 scripts/analyze_results.py "$RAW_OUT" "$ANALYZED_OUT" "$SUMMARY_OUT"
+    python3 scripts/analyze_results.py "$RAW_OUT" "$ANALYZED_OUT"
 fi
 
 printf 'wrote %s\n' "$RAW_OUT"
 printf 'wrote %s\n' "$ANALYZED_OUT"
-printf 'wrote %s\n' "$SUMMARY_OUT"

@@ -18,7 +18,9 @@ void cli_print_usage(FILE *out, const char *program)
             "  --trials <int> --steps <int> --threads <int>\n"
             "  --processes <int> --batch-size <int> --queue-size <int>\n"
             "  --workload <uniform|skewed> --skew-factor <int>\n"
-            "  --work-iters <int> --affinity <on|off> --core-count <int>\n"
+            "  --profile <default|process_friendly|thread_friendly>\n"
+            "  --work-iters <int> --inner-work <int>\n"
+            "  --affinity <on|off> --core-count <int>\n"
             "  --pre-work <int> --post-work <int>\n"
             "  --sync <nosync|mutex|reduce> --ipc <pipe|shm>\n"
             "  --enable-pipeline <0|1> --metrics-detail <0|1>\n"
@@ -97,6 +99,8 @@ int cli_parse_args(int argc, char **argv, Config *cfg)
             if (require_value(argc, &i) != 0 || parse_ipc_mode(argv[i], &cfg->ipc_mode) != 0) return -1;
         } else if (strcmp(arg, "--workload") == 0) {
             if (require_value(argc, &i) != 0 || parse_workload_mode(argv[i], &cfg->workload_mode) != 0) return -1;
+        } else if (strcmp(arg, "--profile") == 0) {
+            if (require_value(argc, &i) != 0 || parse_profile(argv[i], &cfg->profile) != 0) return -1;
         } else if (strcmp(arg, "--trials") == 0) {
             if (require_value(argc, &i) != 0 || parse_long_arg(argv[i], 1, LONG_MAX, &cfg->trials) != 0) return -1;
         } else if (strcmp(arg, "--steps") == 0) {
@@ -114,6 +118,9 @@ int cli_parse_args(int argc, char **argv, Config *cfg)
         } else if (strcmp(arg, "--work-iters") == 0) {
             if (require_value(argc, &i) != 0 ||
                 parse_ll_arg(argv[i], 1, LLONG_MAX, &cfg->work_iters) != 0) return -1;
+        } else if (strcmp(arg, "--inner-work") == 0) {
+            if (require_value(argc, &i) != 0 ||
+                parse_ll_arg(argv[i], 0, LLONG_MAX, &cfg->inner_work) != 0) return -1;
         } else if (strcmp(arg, "--affinity") == 0) {
             if (require_value(argc, &i) != 0 || parse_on_off(argv[i], &cfg->affinity_enabled) != 0) return -1;
         } else if (strcmp(arg, "--core-count") == 0) {

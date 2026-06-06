@@ -1,5 +1,6 @@
 #include "thread_mode.h"
 
+#include "affinity.h"
 #include "metrics.h"
 #include "postprocess.h"
 #include "preprocess.h"
@@ -51,6 +52,10 @@ static void *thread_worker(void *arg_ptr)
 {
     ThreadArg *arg = (ThreadArg *)arg_ptr;
     const Config *cfg = arg->cfg;
+    if (cfg->affinity_enabled) {
+        int core_count = cfg->core_count > 0 ? cfg->core_count : cfg->threads;
+        (void)pin_current_to_core(arg->thread_id % core_count);
+    }
     result_init(&arg->local_result);
     for (long i = arg->start_idx; i < arg->end_idx; ++i) {
         int collided = 0;

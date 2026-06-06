@@ -1,5 +1,6 @@
 #include "process_mode.h"
 
+#include "affinity.h"
 #include "ipc.h"
 #include "ipc_shm.h"
 #include "postprocess.h"
@@ -29,6 +30,8 @@ int run_process_mode(const Config *cfg, Result *out, StageMetrics *metrics)
     int failed = 0;
     double start;
     double end;
+    double compute_wall_start;
+    double compute_wall_end;
     PostSummary summary;
 
     if (cfg == 0 || out == 0 || metrics == 0 || cfg->processes <= 0) {
@@ -57,6 +60,7 @@ int run_process_mode(const Config *cfg, Result *out, StageMetrics *metrics)
     end = now_sec();
     metrics->t_pre = elapsed_sec(start, end);
 
+    compute_wall_start = now_sec();
     for (int i = 0; i < cfg->processes; ++i) {
         if (cfg->ipc_mode == IPC_PIPE && pipe(pipes[i]) != 0) {
             failed = 1;
@@ -73,6 +77,10 @@ int run_process_mode(const Config *cfg, Result *out, StageMetrics *metrics)
             Config child_cfg = *cfg;
             long s;
             long e;
+            int core_count = cfg->core_count > 0 ? cfg->core_count : cfg->processes;
+            if (cfg->affinity_enabled) {
+                (void)pin_current_to_core(i % core_count);
+            }
             if (cfg->ipc_mode == IPC_PIPE) {
                 close(pipes[i][0]);
             }
@@ -88,6 +96,9 @@ int run_process_mode(const Config *cfg, Result *out, StageMetrics *metrics)
                 ipc_write_result(pipes[i][1], &local);
                 close(pipes[i][1]);
             } else {
+                /* Each child writes only its own shared-memory slot. The
+                 * parent reads slots after waitpid(), so no lock or busy
+                 * polling is needed for this result handoff. */
                 shm_write_result(&shm_table, i, &local);
             }
             _exit(0);
@@ -99,14 +110,17 @@ int run_process_mode(const Config *cfg, Result *out, StageMetrics *metrics)
     for (int i = 0; i < cfg->processes; ++i) {
         if (pids[i] > 0) {
             int status;
-            double wait_start = now_sec();
             if (waitpid(pids[i], &status, 0) < 0 || !WIFEXITED(status) ||
                 WEXITSTATUS(status) != 0) {
                 failed = 1;
             }
-            metrics->t_sync += elapsed_sec(wait_start, now_sec());
         }
     }
+    compute_wall_end = now_sec();
+    /* Parent waitpid() overlaps child computation. Treat the fork-to-reap
+     * wall interval as the parallel compute stage instead of counting all
+     * wait time as sequential synchronization overhead. */
+    metrics->t_compute = elapsed_sec(compute_wall_start, compute_wall_end);
     if (cfg->ipc_mode == IPC_PIPE) {
         for (int i = 0; i < cfg->processes; ++i) {
             Result child_result;
@@ -154,13 +168,6 @@ int run_process_mode(const Config *cfg, Result *out, StageMetrics *metrics)
     metrics->t_post = elapsed_sec(start, end);
     metrics->processed_batches = cfg->processes;
     metrics->t_total_end = now_sec();
-    metrics->t_compute = metrics_total(metrics) - metrics->t_pre -
-                         metrics->t_sync - metrics->t_ipc - metrics->t_merge -
-                         metrics->t_post;
-    if (metrics->t_compute < 0.0) {
-        metrics->t_compute = 0.0;
-    }
-
     free(pipes);
     free(pids);
     shm_result_table_destroy(&shm_table);

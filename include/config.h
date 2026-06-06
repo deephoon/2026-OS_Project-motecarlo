@@ -41,6 +41,12 @@ typedef enum {
     SCALING_UTILIZATION = 1
 } ScalingMode;
 
+typedef enum {
+    PROFILE_DEFAULT = 0,
+    PROFILE_PROCESS_FRIENDLY = 1,
+    PROFILE_THREAD_FRIENDLY = 2
+} WorkloadProfile;
+
 typedef struct {
     RunMode mode;
     SyncMode sync_mode;
@@ -49,8 +55,10 @@ typedef struct {
     IpcMode ipc_mode;
     WorkloadMode workload_mode;
     ScalingMode scaling_mode;
+    WorkloadProfile profile;
     long trials;
     long long work_iters;
+    long long inner_work;
     int time_steps;
     int threads;
     int processes;
@@ -68,6 +76,7 @@ typedef struct {
 } Config;
 
 void config_set_defaults(Config *cfg);
+void config_apply_profile_defaults(Config *cfg);
 int config_validate(const Config *cfg);
 
 #endif

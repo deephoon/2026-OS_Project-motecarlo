@@ -47,15 +47,17 @@ def group_key(row):
         row.get("skew_factor", ""),
         row.get("pre_work", ""),
         row.get("post_work", ""),
+        row.get("profile", "default"),
+        row.get("inner_work", "0"),
     )
 
 
 def main():
-    if len(sys.argv) != 4:
-        print("usage: analyze_results.py RAW_CSV ANALYZED_CSV SUMMARY_MD", file=sys.stderr)
+    if len(sys.argv) != 3:
+        print("usage: analyze_results.py RAW_CSV ANALYZED_CSV", file=sys.stderr)
         return 2
 
-    raw_path, analyzed_path, summary_path = sys.argv[1:]
+    raw_path, analyzed_path = sys.argv[1:]
     with open(raw_path, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
 
@@ -107,6 +109,8 @@ def main():
             "skew_factor": base_key[3],
             "pre_work": base_key[4],
             "post_work": base_key[5],
+            "profile": base_key[6],
+            "inner_work": base_key[7],
             "avg_time_total": f"{avg_time:.6f}",
             "min_time_total": f"{min(times) if times else 0.0:.6f}",
             "stdev_time_total": f"{stdev(times):.6f}",
@@ -133,64 +137,9 @@ def main():
 
     fieldnames = list(analyzed_rows[0].keys()) if analyzed_rows else []
     with open(analyzed_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=fieldnames, lineterminator="\n")
         writer.writeheader()
         writer.writerows(analyzed_rows)
-
-    fastest = sorted(analyzed_rows, key=lambda r: float(r["avg_time_total"]))[:5]
-    risky = [
-        r for r in analyzed_rows
-        if r["valid_all"] != "1" or r["matches_seq_checksum"] != "1"
-    ]
-    seq_rows = [r for r in analyzed_rows if r["case_name"] == "seq"]
-    seq_time = seq_rows[0]["avg_time_total"] if seq_rows else "n/a"
-
-    with open(summary_path, "w", encoding="utf-8") as f:
-        f.write("# Final Experiment Summary\n\n")
-        f.write("## Conditions\n\n")
-        if analyzed_rows:
-            first = analyzed_rows[0]
-            f.write(f"- trials: {first['trials']}\n")
-            f.write(f"- steps: {first['steps']}\n")
-            f.write(f"- repeats: {first['repeats']}\n")
-            f.write(f"- workload: {first['workload']}\n")
-            f.write(f"- skew_factor: {first['skew_factor']}\n")
-            f.write(f"- pre_work: {first['pre_work']}\n")
-            f.write(f"- post_work: {first['post_work']}\n")
-            f.write(f"- sequential baseline avg: {seq_time}s\n\n")
-        f.write("## OS26 Guide Coverage\n\n")
-        f.write("| Requirement | Evidence in this run |\n")
-        f.write("| --- | --- |\n")
-        f.write("| sequential baseline | `seq` case |\n")
-        f.write("| single/multi thread | `thread_1_reduce`, `thread_2_reduce`, `thread_4_reduce`, `thread_8_reduce` |\n")
-        f.write("| child process | `process_1_pipe`, `process_2_pipe`, `process_4_pipe`, and shm variants |\n")
-        f.write("| hybrid process + thread | `hybrid_2x2`, `hybrid_2x4`, `hybrid_4x2`, `hybrid_2x4_shm` |\n")
-        f.write("| synchronization comparison | `thread_4_nosync`, `thread_4_mutex`, `thread_4_reduce` |\n")
-        f.write("| pipeline and merge strategy | `pipeline_final_b1000`, `pipeline_interactive_b1000` |\n")
-        f.write("| batch granularity | `pipeline_interactive_b100`, `pipeline_interactive_b1000`, `pipeline_interactive_b10000` |\n\n")
-        f.write("## Fastest Cases By Average Time\n\n")
-        f.write("| Case | Avg time | Speedup | Efficiency | Valid | Checksum matches seq |\n")
-        f.write("| --- | ---: | ---: | ---: | ---: | ---: |\n")
-        for r in fastest:
-            f.write(
-                f"| {r['case_name']} | {r['avg_time_total']} | {r['speedup_vs_seq_avg']} | "
-                f"{r['efficiency_vs_seq_avg']} | {r['valid_all']} | {r['matches_seq_checksum']} |\n"
-            )
-        f.write("\n## Validation Risks\n\n")
-        if risky:
-            f.write("| Case | Valid all | Checksum count | Matches seq checksum |\n")
-            f.write("| --- | ---: | ---: | ---: |\n")
-            for r in risky:
-                f.write(
-                    f"| {r['case_name']} | {r['valid_all']} | {r['checksum_count']} | {r['matches_seq_checksum']} |\n"
-                )
-        else:
-            f.write("- All measured cases were valid and matched the sequential checksum.\n")
-        f.write("\n## Report Guidance\n\n")
-        f.write("- Treat `thread_4_nosync` as a synchronization failure demonstration if checksum differs.\n")
-        f.write("- Use `speedup_vs_seq_avg` and `efficiency_vs_seq_avg` from `final_analyzed.csv`, not the raw per-run zero placeholders.\n")
-        f.write("- Explain `time_sync` as observed synchronization/IPC wait cost. For queue modes it can include accumulated worker wait time.\n")
-        f.write("- Use large `TRIALS`, large `STEPS`, and at least 5 repeats for final report claims.\n")
 
     return 0
 

@@ -70,6 +70,16 @@ const char *scaling_mode_to_string(ScalingMode mode)
     }
 }
 
+const char *profile_to_string(WorkloadProfile profile)
+{
+    switch (profile) {
+    case PROFILE_DEFAULT: return "default";
+    case PROFILE_PROCESS_FRIENDLY: return "process_friendly";
+    case PROFILE_THREAD_FRIENDLY: return "thread_friendly";
+    default: return "unknown";
+    }
+}
+
 const char *affinity_to_string(int enabled)
 {
     return enabled ? "on" : "off";
@@ -139,6 +149,16 @@ int parse_scaling_mode(const char *text, ScalingMode *out)
     if (text == 0 || out == 0) return -1;
     if (strcmp(text, "strong") == 0) *out = SCALING_STRONG;
     else if (strcmp(text, "utilization") == 0) *out = SCALING_UTILIZATION;
+    else return -1;
+    return 0;
+}
+
+int parse_profile(const char *text, WorkloadProfile *out)
+{
+    if (text == 0 || out == 0) return -1;
+    if (strcmp(text, "default") == 0) *out = PROFILE_DEFAULT;
+    else if (strcmp(text, "process_friendly") == 0) *out = PROFILE_PROCESS_FRIENDLY;
+    else if (strcmp(text, "thread_friendly") == 0) *out = PROFILE_THREAD_FRIENDLY;
     else return -1;
     return 0;
 }

@@ -1,5 +1,7 @@
 # Final Experiment Plan
 
+The primary final experiment uses the actual Monte Carlo simulation with a fixed total workload. Artificial CPU work and pre/post stress are secondary diagnostic experiments, not the main scaling evidence.
+
 ## Goals
 
 1. Compare sequential, thread, process, and hybrid execution.
@@ -13,7 +15,7 @@
 
 | Parameter | Values |
 | --- | --- |
-| `trials` | `10000`, `100000`, `1000000` |
+| `trials` | `10000` for smoke tests, `120000000` for final scaling |
 | `steps` | `30`, `50`, `100` |
 | `threads` | `1`, `2`, `4`, `8` |
 | `processes` | `2`, `4` |
@@ -74,11 +76,19 @@ sequential_fraction_estimate = (T_pre + T_sync + T_ipc + T_merge + T_post) / T_t
 | pipeline interactive | 1000 | | | | balanced baseline |
 | pipeline interactive | 10000 | | | | coarse-grained scheduling |
 
+## Primary Commands
+
+```sh
+TRIALS=120000000 STEPS=50 REPEATS=5 scripts/run_real_scaling.sh
+python3 scripts/analyze_real_scaling.py
+TRIALS=120000000 STEPS=50 scripts/run_real_utilization.sh
+```
+
 ## Capture Targets
 
 1. `make test` success.
-2. `TRIALS=10000 STEPS=30 scripts/run_final.sh`.
-3. `cat results/csv/final_results.csv`.
+2. `scripts/professor_smoke_test.sh`.
+3. `cat results/csv/real_scaling/real_scaling_summary.csv`.
 4. `nosync` row with `valid=0` when race appears.
 5. Docker build and Docker-internal script execution.
 6. CPU utilization using `pidstat -u -r -C sim 1` during a long pipeline or hybrid run.

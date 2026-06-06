@@ -72,13 +72,13 @@ int result_validate(const Result *r, long expected_trials)
 void result_print_csv_header(void)
 {
     puts("mode,sync,threads,trials,steps,time_sec,speedup,total_trials,"
-         "collision_count,hist_sum,checksum,valid");
+         "collision_count,hist_sum,checksum,valid,profile,inner_work");
 }
 
 void result_print_csv_row(const Config *cfg, double time_sec, double speedup,
                           const Result *r, int valid)
 {
-    printf("%s,%s,%d,%ld,%d,%.6f,%.6f,%ld,%ld,%ld,%lu,%d\n",
+    printf("%s,%s,%d,%ld,%d,%.6f,%.6f,%ld,%ld,%ld,%lu,%d,%s,%lld\n",
            run_mode_to_string(cfg->mode),
            sync_mode_to_string(cfg->sync_mode),
            cfg->threads,
@@ -90,5 +90,7 @@ void result_print_csv_row(const Config *cfg, double time_sec, double speedup,
            r->collision_count,
            result_hist_sum(r),
            r->checksum,
-           valid);
+           valid,
+           profile_to_string(cfg->profile),
+           cfg->inner_work);
 }

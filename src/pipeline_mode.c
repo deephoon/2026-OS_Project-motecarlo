@@ -1,5 +1,6 @@
 #include "pipeline_mode.h"
 
+#include "affinity.h"
 #include "merge_queue.h"
 #include "postprocess.h"
 #include "preprocess.h"
@@ -19,6 +20,7 @@ typedef struct {
 } PreprocessorArg;
 
 typedef struct {
+    int worker_id;
     const Config *cfg;
     TaskQueue *task_queue;
     MergeQueue *merge_queue;
@@ -58,6 +60,12 @@ static void *pipeline_worker(void *arg_ptr)
 {
     PipelineWorkerArg *arg = (PipelineWorkerArg *)arg_ptr;
     TaskBatch batch;
+
+    if (arg->cfg->affinity_enabled) {
+        int core_count = arg->cfg->core_count > 0 ?
+                         arg->cfg->core_count : arg->cfg->threads;
+        (void)pin_current_to_core(arg->worker_id % core_count);
+    }
 
     while (1) {
         Result local;
@@ -198,6 +206,7 @@ int run_pipeline_mode(const Config *cfg, Result *out, StageMetrics *metrics)
         }
 
         for (int i = 0; i < cfg->threads; ++i) {
+            worker_args[i].worker_id = i;
             worker_args[i].cfg = cfg;
             worker_args[i].task_queue = &task_queue;
             worker_args[i].merge_queue = &merge_queue;
@@ -231,6 +240,7 @@ int run_pipeline_mode(const Config *cfg, Result *out, StageMetrics *metrics)
         prep_arg.metrics_mutex = &metrics_mutex;
         pthread_create(&preprocessor, 0, preprocessor_thread, &prep_arg);
         for (int i = 0; i < cfg->threads; ++i) {
+            worker_args[i].worker_id = i;
             worker_args[i].cfg = cfg;
             worker_args[i].task_queue = &task_queue;
             worker_args[i].merge_queue = &merge_queue;

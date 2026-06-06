@@ -1,0 +1,2 @@
+mode,scaling,threads,work_iters,affinity,time_total,checksum,valid
+ideal,utilization,4,1000000000,on,5.812715586,2576466484346514882,1

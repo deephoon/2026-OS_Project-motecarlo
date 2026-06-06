@@ -160,11 +160,42 @@ static void burn_cpu_work(int difficulty, unsigned int seed)
     workload_sink = x;
 }
 
+static long long profile_inner_work(const Config *cfg)
+{
+    if (cfg == 0) {
+        return 0;
+    }
+    if (cfg->inner_work > 0) {
+        return cfg->inner_work;
+    }
+    switch (cfg->profile) {
+    case PROFILE_PROCESS_FRIENDLY:
+        return 2000;
+    case PROFILE_THREAD_FRIENDLY:
+        return 64;
+    case PROFILE_DEFAULT:
+    default:
+        return 0;
+    }
+}
+
+static void burn_inner_cpu_work(long long inner_work, unsigned int seed)
+{
+    volatile unsigned long long x = seed;
+    for (long long i = 0; i < inner_work; ++i) {
+        x = x * 1664525ULL + 1013904223ULL;
+        x ^= (x >> 13);
+        x += (unsigned long long)i;
+    }
+    workload_sink = (unsigned int)x;
+}
+
 RiskLevel run_trial_for_index(const Config *cfg, long trial_index,
                               int *collided_out)
 {
     unsigned int trial_seed;
     int difficulty;
+    long long inner_work;
     if (cfg == 0) {
         if (collided_out != 0) *collided_out = 0;
         return RISK_SAFE;
@@ -173,6 +204,10 @@ RiskLevel run_trial_for_index(const Config *cfg, long trial_index,
     difficulty = workload_difficulty_for_trial(cfg, trial_index);
     if (difficulty > 0) {
         burn_cpu_work(difficulty, trial_seed);
+    }
+    inner_work = profile_inner_work(cfg);
+    if (inner_work > 0) {
+        burn_inner_cpu_work(inner_work, trial_seed);
     }
     return run_trial(&trial_seed, cfg->time_steps, collided_out);
 }

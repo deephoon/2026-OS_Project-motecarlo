@@ -1,6 +1,6 @@
 # System Design
 
-## Existing Midterm Structure
+## Initial Structure
 
 ```text
 Input Parameters
@@ -138,7 +138,7 @@ Process and thread roles are separated: processes own large simulation groups, w
 | `T_post` | Validation and summary calculation |
 | `T_total` | End-to-end run time |
 
-Synchronization time is not perfectly separable in a pthread program because waiting and computation can overlap. The current implementation measures observable queue synchronization sections, condition-variable waits, parent waitpid time, and parent-side IPC read time, and documents the limitation.
+Synchronization time is not perfectly separable in a pthread program because waiting and computation can overlap. The current implementation measures observable queue synchronization sections and condition-variable waits. In process/hybrid mode, the fork-to-reap interval is treated as the parallel compute window instead of incorrectly counting the full `waitpid()` interval as sequential synchronization overhead.
 
 ## TODO Extensions
 
