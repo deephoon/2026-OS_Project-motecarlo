@@ -87,12 +87,17 @@ CPU 활용률과 strong scaling은 별도 인공 loop가 아니라 실제 Monte 
 
 ## 프로젝트 변화 과정
 
-이 프로젝트는 처음부터 현재 구조로 설계된 것이 아닙니다. 최초에는 독립적인 Monte Carlo trial을 여러 thread로 나누는 비교적 단순한 병렬 프로그램이었습니다. 이후 정확성 문제, lock contention, process 간 결과 전달, 동적 scheduling, 중간 결과 집계, core 활용률 검증 문제를 순서대로 발견하고 구조를 확장했습니다.
+이 프로젝트는 처음부터 현재 구조로 설계된 것이 아닙니다. 코드 구현 이전에는 이미지 필터를 process와 thread로 병렬 처리하는 방향을 검토했습니다. 그러나 이미지 필터는 파일 I/O, 메모리 접근, cache locality, 이미지 경계 처리의 영향을 크게 받아 CPU core 활용률과 운영체제 실행 구조 자체의 차이를 분리하기 어렵다고 판단했습니다.
+
+이에 따라 주제를 반복 계산 중심의 Monte Carlo 차량 추종 위험 simulation으로 변경했습니다. 이후 초기 Monte Carlo thread 구현에서 정확성 문제, lock contention, process 간 결과 전달, 동적 scheduling, 중간 결과 집계, core 활용률 검증 문제를 순서대로 발견하고 현재 구조까지 확장했습니다.
 
 전체 변화의 핵심은 다음과 같습니다.
 
 ```text
-단순 Sequential / Thread 비교
+이미지 필터 병렬처리 계획
+  -> I/O와 메모리 접근 영향이 커 실행 구조 비교가 불명확
+  -> CPU-bound Monte Carlo 차량 추종 위험 simulation으로 방향 전환
+  -> 단순 Sequential / Thread 비교
   -> shared result race condition 발견
   -> mutex로 정확성 회복
   -> mutex contention 발견
@@ -105,10 +110,22 @@ CPU 활용률과 strong scaling은 별도 인공 loop가 아니라 실제 Monte 
   -> 실제 Monte Carlo 자체가 4-core를 거의 포화하도록 최종 실험 확정
 ```
 
+### 전체 발전 흐름
+
+| 구간 | 당시 상태 | 핵심 판단과 변화 |
+| --- | --- | --- |
+| 초기 계획 | 이미지 필터를 sequential/process/thread/hybrid로 처리하는 방향 검토 | I/O와 memory access 영향보다 실행 구조 자체를 선명하게 비교할 CPU-bound workload가 필요하다고 판단 |
+| 방향 전환 | Monte Carlo 차량 추종 위험 계산 채택 | 독립 trial, 조절 가능한 계산량, deterministic checksum을 이용해 병렬화와 정확성을 함께 검증 |
+| 중간 MVP | `seq`, `thread`, `nosync`, `mutex`, `reduce` 구현 | Race condition을 재현하고 local reduce로 정확성과 성능을 함께 확보 |
+| OS 구조 확장 | `process`, pipe/shm IPC, `hybrid`, `pipeline`, queue, interactive merge 추가 | 주소 공간, IPC, synchronization, producer-consumer, 계층적 병렬화 비교 가능 |
+| 실험 강화 | pre/post stage, skewed workload, profile, metrics, affinity 추가 | Amdahl 한계, load imbalance, overhead, core 배치 문제를 측정 가능하게 구성 |
+| 최종 검증 | 실제 Monte Carlo 120M trials, 5회 반복, core별 utilization 측정 | 인공 loop가 아닌 실제 workload에서 정확성, strong scaling, CPU saturation 검증 |
+
 ### 변화 요약
 
 | 단계 | 당시 문제 | 원인 분석 | 구현 변경 | 검증 결과 |
 | --- | --- | --- | --- | --- |
+| 0. 초기 계획 | 이미지 필터로 OS 병렬구조를 비교하려 함 | I/O, memory access, 경계 처리 영향이 커 CPU 실행 구조 비교가 흐려질 수 있음 | CPU-bound Monte Carlo workload로 주제 변경 | 계산량 조절과 deterministic 검증이 가능한 기반 확보 |
 | 1. 기준 구현 | 병렬 성능을 비교할 기준이 없음 | 기준시간과 기준 결과 부재 | deterministic sequential Monte Carlo 구현 | 모든 정상 mode가 비교할 baseline 확보 |
 | 2. 초기 thread | shared result 값이 실행마다 달라짐 | 여러 thread의 동시 update로 data race 발생 | `nosync`, `mutex`, `reduce` 비교 구조 구현 | `nosync valid=0`, mutex/reduce `valid=1` |
 | 3. Local reduce | mutex가 정확하지만 느림 | trial hot loop에서 반복 lock contention | worker별 local result 후 마지막 병합 | hybrid reduce가 mutex보다 약 `1.95x` 빠름 |
@@ -116,10 +133,29 @@ CPU 활용률과 strong scaling은 별도 인공 loop가 아니라 실제 Monte 
 | 5. Hybrid | process와 thread를 분리해서만 비교함 | 실제 시스템은 두 구조를 계층적으로 조합 가능 | child process 내부 pthread worker 구현 | hybrid 2x2 shm efficiency `94.0%` |
 | 6. Pipeline | static partition은 균등 workload에서 너무 쉽게 동작 | 동적 작업 배분과 producer-consumer 구조 부재 | task queue, mutex, condition variable 추가 | queue scheduling과 wait overhead 측정 가능 |
 | 7. Interactive merge | final reduce는 모든 worker 종료 전 결과를 볼 수 없음 | 중간 결과 전달 경로 부재 | merge queue와 aggregator thread 추가 | final/interactive 기능 및 비용 비교 가능 |
-| 8. 현실적 workload | 균등 trial만으로 load imbalance 분석이 약함 | worker별 작업량 차이가 거의 없음 | skewed workload와 workload profile 추가 | static/queue 및 process/thread 특성 비교 가능 |
+| 8. 현실적 workload | 균등 trial만으로 load imbalance와 순차 구간 분석이 약함 | worker별 작업량 차이가 거의 없고 바로 병렬 계산 시작 | pre/post work, skewed workload, workload profile 추가 | Amdahl 한계, static/queue, process/thread 특성 비교 가능 |
 | 9. 측정 신뢰도 | 짧은 실행과 전체 시간만으로 원인 분석이 어려움 | OS noise와 내부 overhead가 분리되지 않음 | stage metrics, counters, 5회 반복 자동화 | 정확성, scaling, sync, IPC 근거 확보 |
 | 10. Core 검증 | CPU%가 높아도 core를 균일하게 쓰는지 불명확 | scheduler 배치와 hybrid affinity 중복 가능 | Linux affinity, 전역 worker ID, `mpstat` 측정 | 4-worker Util/Core `99.2~99.8%` |
 | 11. 최종 구조 확정 | 별도 인공 CPU benchmark가 실제 프로젝트를 대표하지 못함 | 실제 Monte Carlo가 아닌 loop의 수치는 구조 검증과 분리됨 | 인공 `ideal` mode 제거, 실제 Monte Carlo 계산량 확대 | 실제 workload에서 4-worker efficiency `92.5~94.0%` |
+
+### 0단계: 이미지 필터 계획에서 Monte Carlo로 전환
+
+초기 계획은 이미지 데이터를 2차원 배열로 보고 sequential, process, thread, hybrid 구조로 필터 연산을 병렬 처리하는 것이었습니다. 그러나 이미지 필터의 성능은 다음 요소의 영향을 크게 받을 수 있습니다.
+
+- 이미지 파일 입력과 출력
+- 큰 배열에 대한 memory bandwidth와 cache locality
+- 필터 kernel의 경계 처리
+- 이미지 크기와 포맷에 따른 데이터 배치
+
+이 조건에서는 실행시간 차이가 process/thread 구조 때문인지 I/O와 memory access 때문인지 분리하기 어렵습니다. 따라서 파일 I/O를 제거하고, trial 수와 time step으로 계산량을 직접 조절할 수 있는 Monte Carlo 차량 추종 위험 simulation으로 방향을 전환했습니다.
+
+Monte Carlo workload는 다음 장점이 있습니다.
+
+- Trial 간 의존성이 낮아 process와 thread에 동일한 계산을 배분할 수 있습니다.
+- `trials`, `steps`, `inner_work`로 CPU 계산량을 조절할 수 있습니다.
+- Trial index 기반 deterministic seed로 실행 구조가 달라도 결과를 검증할 수 있습니다.
+- Histogram 집계 과정에서 race condition, mutex, reduce를 비교할 수 있습니다.
+- 충분히 큰 workload에서는 실제 simulation 자체로 core saturation을 검증할 수 있습니다.
 
 ### 1단계: 재현 가능한 Sequential Baseline
 
@@ -701,6 +737,20 @@ Profile은 실행 구조별 특성을 비교하기 위한 진단 옵션입니다
 | `checksum` | 실행 구조 간 결과 일치 검증 |
 
 `time_sync`는 여러 worker의 대기 시간을 누적한 값입니다. 따라서 모든 stage 값을 더해도 `time_total`과 일치하지 않을 수 있습니다. `time_sync`는 wall-clock 구간이 아니라 synchronization 부담을 비교하는 보조 지표입니다.
+
+Process와 hybrid의 `time_compute`는 child 생성 직전부터 모든 child를 `waitpid()`로 회수할 때까지의 wall-clock 구간입니다. Parent가 `waitpid()`에서 대기하는 동안 child가 실제 계산을 수행하므로 이 시간을 전부 순차 synchronization 비용으로 분류하지 않습니다. 현재 process/hybrid CSV는 end-to-end 성능, IPC read, parent merge를 비교하는 데 적합하지만 child 내부의 lock wait와 세부 compute 시간을 parent metrics로 합산하지는 않습니다.
+
+### Amdahl 관점의 해석
+
+Worker 수를 늘려도 다음 구간과 overhead는 완전히 사라지지 않습니다.
+
+```text
+T_pre + T_sync + T_ipc + T_merge + T_post
+```
+
+`--pre-work`, `--post-work`는 계산 전후의 순차 작업량을 의도적으로 늘려 sequential fraction이 speedup 상한을 만드는 상황을 확인하기 위한 진단 옵션입니다. Pipeline은 stage overlap과 동적 scheduling을 제공하지만 queue, condition variable, merge 비용이 추가되므로 모든 조건에서 더 빠르지는 않습니다.
+
+현재 stage metrics는 병목 위치를 비교하기 위한 관측값입니다. 특히 누적 `T_sync`와 process/hybrid의 fork-to-reap `T_compute` 정의 때문에 stage 값을 단순 합산해 Amdahl의 정확한 순차 비율이라고 해석하면 안 됩니다. 최종 strong scaling 판단은 동일한 총 workload에서 측정한 `T1/N`, 실제 실행시간, speedup, efficiency를 기준으로 합니다.
 
 ---
 
