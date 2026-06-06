@@ -23,4 +23,4 @@ test: $(TARGET)
 	scripts/test_modes.sh
 
 clean:
-	rm -f $(TARGET) $(OBJS)
+	rm -f $(TARGET) src/*.o

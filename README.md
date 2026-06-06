@@ -671,13 +671,6 @@ scripts/run_real_utilization.sh
 
 이 스크립트는 `thread_4_reduce`, `process_4_shm`, `hybrid_2x2_shm`, `pipeline_4_final`을 실행하고 `mpstat`와 GNU time 결과를 저장합니다.
 
-### Synchronization 및 Scheduling 진단
-
-```sh
-TRIALS=1000000 STEPS=50 REPEATS=5 \
-scripts/run_final.sh
-```
-
 ### Hybrid Synchronization 비교
 
 ```sh
@@ -800,16 +793,16 @@ Docker Desktop은 Linux VM 자원 설정의 영향을 받습니다. Worker scali
 │   ├── run_real_utilization.sh
 │   ├── analyze_real_scaling.py
 │   ├── test_modes.sh
-│   ├── run_final.sh
 │   ├── run_hybrid_sync.sh
 │   ├── run_profile_compare.sh
 │   └── analyze_profile_compare.py
 ├── docs/
-│   ├── design.md
-│   ├── experiment_plan.md
-│   ├── os26_final_experiment_guide.md
-│   └── reproducible_linux_experiment_guide.md
+│   └── final_report_draft.md
 ├── results/csv/
+│   ├── real_montecarlo_scaling_2026_06_06_5repeat/
+│   ├── real_montecarlo_utilization_2026_06_06/
+│   ├── hybrid_sync_2026_06_06/
+│   └── profile_compare_2026_06_06/
 ├── Makefile
 ├── Dockerfile
 └── docker-compose.yml

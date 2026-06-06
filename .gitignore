@@ -1,9 +1,6 @@
 sim
 *.o
-results/raw/*
 results/csv/*
-!results/raw/.gitkeep
-!results/csv/.gitkeep
 !results/csv/real_montecarlo_scaling_2026_06_06_5repeat/
 !results/csv/real_montecarlo_scaling_2026_06_06_5repeat/*.csv
 results/csv/real_montecarlo_scaling_2026_06_06_5repeat/time/
