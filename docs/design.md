@@ -116,7 +116,7 @@ The IPC implementation supports two result-transfer paths. `--ipc pipe` writes t
 [Child Process]
    create pthread workers
    split child trial range
-   local reduce
+   nosync, mutex, or local reduce
    write process-local Result through pipe or shared memory
        |
        v
@@ -124,7 +124,7 @@ The IPC implementation supports two result-transfer paths. `--ipc pipe` writes t
    merge process results
 ```
 
-Process and thread roles are separated: processes own large simulation groups, while threads perform fine-grained local computation inside each process.
+Process and thread roles are separated: processes own large simulation groups, while threads perform fine-grained local computation inside each process. The child-local pthread group supports the same `nosync`, `mutex`, and `reduce` strategies as thread mode so synchronization correctness and contention can be compared inside the hybrid structure.
 
 ## Stage Timer Design
 

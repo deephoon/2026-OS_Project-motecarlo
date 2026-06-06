@@ -41,6 +41,15 @@ def parse_cpu_percent(path):
     return 0.0
 
 
+def parse_max_rss_kb(path):
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if "Maximum resident set size" in line:
+                match = re.search(r":\s*([0-9]+)", line)
+                return int(match.group(1)) if match else 0
+    return 0
+
+
 def parse_mpstat(path, workers):
     per_core = {}
     if not os.path.exists(path):
@@ -122,6 +131,7 @@ def analyze_utilization():
         )
         per_core = parse_mpstat(mpstat_path, workers)
         cpu = parse_cpu_percent(time_path)
+        max_rss_kb = parse_max_rss_kb(time_path)
         rows.append({
             "case_name": case_name,
             "workers": workers,
@@ -132,6 +142,7 @@ def analyze_utilization():
             "mpstat_min_core": f"{min(per_core) if per_core else 0.0:.1f}",
             "mpstat_max_core": f"{max(per_core) if per_core else 0.0:.1f}",
             "mpstat_stdev": f"{stdev(per_core):.2f}",
+            "max_rss_kb": max_rss_kb,
             "valid": sim["valid"],
             "checksum": sim["checksum"],
         })

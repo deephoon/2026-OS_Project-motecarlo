@@ -6,8 +6,7 @@ typedef enum {
     MODE_THREAD = 1,
     MODE_PIPELINE = 2,
     MODE_PROCESS = 3,
-    MODE_HYBRID = 4,
-    MODE_IDEAL = 5
+    MODE_HYBRID = 4
 } RunMode;
 
 typedef enum {
@@ -37,11 +36,6 @@ typedef enum {
 } WorkloadMode;
 
 typedef enum {
-    SCALING_STRONG = 0,
-    SCALING_UTILIZATION = 1
-} ScalingMode;
-
-typedef enum {
     PROFILE_DEFAULT = 0,
     PROFILE_PROCESS_FRIENDLY = 1,
     PROFILE_THREAD_FRIENDLY = 2
@@ -54,10 +48,8 @@ typedef struct {
     MergeMode merge_mode;
     IpcMode ipc_mode;
     WorkloadMode workload_mode;
-    ScalingMode scaling_mode;
     WorkloadProfile profile;
     long trials;
-    long long work_iters;
     long long inner_work;
     int time_steps;
     int threads;

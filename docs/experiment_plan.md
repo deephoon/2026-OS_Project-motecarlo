@@ -35,6 +35,7 @@ The primary final experiment uses the actual Monte Carlo simulation with a fixed
 | E | `--mode pipeline --batch-size 100/1000/10000` | Queue granularity analysis |
 | F | `--mode process --processes 2/4` | Child process comparison |
 | G | `--mode hybrid --processes 2 --threads 2/4` | Process + thread structure |
+| H | `--mode hybrid --sync nosync/mutex/reduce` | Hybrid child-local synchronization comparison |
 
 ## Metrics
 

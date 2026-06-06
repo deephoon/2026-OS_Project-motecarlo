@@ -10,7 +10,6 @@ const char *run_mode_to_string(RunMode mode)
     case MODE_PIPELINE: return "pipeline";
     case MODE_PROCESS: return "process";
     case MODE_HYBRID: return "hybrid";
-    case MODE_IDEAL: return "ideal";
     default: return "unknown";
     }
 }
@@ -61,15 +60,6 @@ const char *workload_mode_to_string(WorkloadMode mode)
     }
 }
 
-const char *scaling_mode_to_string(ScalingMode mode)
-{
-    switch (mode) {
-    case SCALING_STRONG: return "strong";
-    case SCALING_UTILIZATION: return "utilization";
-    default: return "unknown";
-    }
-}
-
 const char *profile_to_string(WorkloadProfile profile)
 {
     switch (profile) {
@@ -93,7 +83,6 @@ int parse_run_mode(const char *text, RunMode *out)
     else if (strcmp(text, "pipeline") == 0) *out = MODE_PIPELINE;
     else if (strcmp(text, "process") == 0) *out = MODE_PROCESS;
     else if (strcmp(text, "hybrid") == 0) *out = MODE_HYBRID;
-    else if (strcmp(text, "ideal") == 0) *out = MODE_IDEAL;
     else return -1;
     return 0;
 }
@@ -140,15 +129,6 @@ int parse_workload_mode(const char *text, WorkloadMode *out)
     if (text == 0 || out == 0) return -1;
     if (strcmp(text, "uniform") == 0) *out = WORKLOAD_UNIFORM;
     else if (strcmp(text, "skewed") == 0) *out = WORKLOAD_SKEWED;
-    else return -1;
-    return 0;
-}
-
-int parse_scaling_mode(const char *text, ScalingMode *out)
-{
-    if (text == 0 || out == 0) return -1;
-    if (strcmp(text, "strong") == 0) *out = SCALING_STRONG;
-    else if (strcmp(text, "utilization") == 0) *out = SCALING_UTILIZATION;
     else return -1;
     return 0;
 }

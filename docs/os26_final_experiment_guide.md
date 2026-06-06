@@ -59,14 +59,18 @@ TRIALS=120000000 STEPS=50 scripts/run_real_utilization.sh
 | child process 병렬처리 | `process_1/2/4_shm` |
 | single/multi thread 비교 | `thread_1/2/4/8_reduce` |
 | process + thread 조합 | `hybrid_2x2_shm`, `hybrid_2x4_shm` |
+| 최적화 조건 교차 비교 | `process_friendly`, `thread_friendly` profile을 process/thread에서 동일 실행 |
+| 최적화된 hybrid의 synchronization 비교 | hybrid `nosync`, `mutex`, `local reduce` |
 | synchronization 문제와 해결 | `nosync`, `mutex`, `local reduce`, mutex+condition variable queue |
 | 예상 성능이 나오지 않을 때 구조 수정 | shared update 제거, shm IPC, affinity mapping, stage metric 수정 |
+| memory 사용량 비교 | GNU time의 Max RSS를 utilization summary에 기록 |
 
 ## 5. 문제 → 원인 → 해결 → 검증
 
 | 문제 | 원인 | 해결 | 검증 |
 | --- | --- | --- | --- |
 | mutex mode가 느림 | trial마다 shared result lock | worker-local result + join 후 reduce | thread scaling 비교 |
+| hybrid 내부 nosync 결과 손상 | child 내부 pthread의 shared result race | child-local mutex 또는 reduce | hybrid sync 5회 비교 |
 | process가 thread보다 느림 | fork/IPC/주소공간 비용 | child-local 계산 후 결과 1회 shm 전달 | process 1/2/4 비교 |
 | hybrid가 core를 겹쳐 사용 | child별 pthread가 같은 core 번호 사용 | global worker id 기반 affinity | hybrid CPU% 비교 |
 | process stage metric 왜곡 | 전체 waitpid 시간을 sync로 기록 | fork-to-reap을 parallel compute window로 기록 | stage metric 확인 |
@@ -86,6 +90,8 @@ TRIALS=120000000 STEPS=50 scripts/run_real_utilization.sh
 results/csv/real_montecarlo_scaling_2026_06_06_5repeat/real_scaling_raw.csv
 results/csv/real_montecarlo_scaling_2026_06_06_5repeat/real_scaling_summary.csv
 results/csv/real_montecarlo_utilization_2026_06_06/real_utilization_summary.csv
+results/csv/hybrid_sync_2026_06_06/hybrid_sync_summary.csv
+results/csv/profile_compare_2026_06_06/profile_compare_summary.csv
 ```
 
 대표 결과:
@@ -98,3 +104,7 @@ results/csv/real_montecarlo_utilization_2026_06_06/real_utilization_summary.csv
 | `pipeline_4_final` | 4 | `3.698x` | `92.5%` | `99.8%` |
 
 현재 실제 Monte Carlo 설계는 4-worker 조건에서 가이드가 요구하는 이상적 scaling과 core saturation에 상당히 근접합니다. `mpstat`에서도 affinity 대상 core 최소 활용률 `99.7%`, 최대 표준편차 `0.16`을 확인했습니다. 8-worker에서는 CPU utilization은 높지만 efficiency가 감소하므로 최적 worker 수와 구조적 overhead를 함께 설명해야 합니다.
+
+Hybrid synchronization 비교에서는 `nosync`가 5회 모두 invalid였고, mutex와 reduce는 동일 checksum을 유지했습니다. Hybrid reduce 평균시간은 `0.0288s`, mutex는 `0.0563s`로 local reduce가 정확성과 성능을 함께 확보했습니다.
+
+Profile 교차 비교에서는 process-friendly 4-worker 조건의 process/thread/hybrid가 모두 약 `89%` efficiency로 근접했고, thread-friendly 조건에서는 thread 4 reduce가 process 4 shm보다 약 `5.7%` 빨랐습니다. 특정 실행 구조가 항상 우월한 것이 아니라 작업 크기와 IPC/synchronization 비율에 따라 선택이 달라진다는 점을 정량적으로 확인했습니다.

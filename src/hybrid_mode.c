@@ -18,8 +18,28 @@ typedef struct {
     const Config *cfg;
     long start_idx;
     long end_idx;
+    Result *shared_result;
+    pthread_mutex_t *result_mutex;
     Result local;
 } HybridThreadArg;
+
+static void hybrid_record_trial(HybridThreadArg *arg, RiskLevel risk, int collided)
+{
+    switch (arg->cfg->sync_mode) {
+    case SYNC_REDUCE:
+        result_add_trial(&arg->local, risk, collided);
+        break;
+    case SYNC_MUTEX:
+        pthread_mutex_lock(arg->result_mutex);
+        result_add_trial(arg->shared_result, risk, collided);
+        pthread_mutex_unlock(arg->result_mutex);
+        break;
+    case SYNC_NOSYNC:
+        /* Deliberately unsafe: demonstrates process-local lost updates. */
+        result_add_trial(arg->shared_result, risk, collided);
+        break;
+    }
+}
 
 static void *hybrid_thread_worker(void *arg_ptr)
 {
@@ -35,7 +55,7 @@ static void *hybrid_thread_worker(void *arg_ptr)
     for (long i = arg->start_idx; i < arg->end_idx; ++i) {
         int collided = 0;
         RiskLevel risk = run_trial_for_index(arg->cfg, i, &collided);
-        result_add_trial(&arg->local, risk, collided);
+        hybrid_record_trial(arg, risk, collided);
     }
     return 0;
 }
@@ -55,6 +75,7 @@ static int run_child_thread_group(const Config *cfg, int process_id,
 {
     pthread_t *threads = 0;
     HybridThreadArg *args = 0;
+    pthread_mutex_t result_mutex;
     long trials = end_idx - start_idx;
     int failed = 0;
 
@@ -62,6 +83,11 @@ static int run_child_thread_group(const Config *cfg, int process_id,
     threads = calloc((size_t)cfg->threads, sizeof(*threads));
     args = calloc((size_t)cfg->threads, sizeof(*args));
     if (threads == 0 || args == 0) {
+        free(threads);
+        free(args);
+        return -1;
+    }
+    if (pthread_mutex_init(&result_mutex, 0) != 0) {
         free(threads);
         free(args);
         return -1;
@@ -76,6 +102,8 @@ static int run_child_thread_group(const Config *cfg, int process_id,
         args[i].cfg = cfg;
         args[i].start_idx = start_idx + (long)i * base + extra_before;
         args[i].end_idx = args[i].start_idx + base + (i < rem ? 1 : 0);
+        args[i].shared_result = out;
+        args[i].result_mutex = &result_mutex;
         if (pthread_create(&threads[i], 0, hybrid_thread_worker, &args[i]) != 0) {
             failed = 1;
             break;
@@ -86,12 +114,13 @@ static int run_child_thread_group(const Config *cfg, int process_id,
             pthread_join(threads[i], 0);
         }
     }
-    if (!failed) {
+    if (!failed && cfg->sync_mode == SYNC_REDUCE) {
         for (int i = 0; i < cfg->threads; ++i) {
             result_merge(out, &args[i].local);
         }
     }
     out->checksum = result_compute_checksum(out);
+    pthread_mutex_destroy(&result_mutex);
     free(threads);
     free(args);
     return failed ? -1 : 0;
@@ -159,11 +188,12 @@ int run_hybrid_mode(const Config *cfg, Result *out, StageMetrics *metrics)
                 close(pipes[i][0]);
             }
             hybrid_partition(cfg->trials, cfg->processes, i, &s, &e);
-            /* Simplified hybrid: each child owns a large simulation group and
-             * runs a process-local pthread reduce over global trial indices.
-             * The parent only merges IPC results. A later version can add
-             * process-local queue scheduling. */
-            run_child_thread_group(&child_cfg, i, s, e, &local);
+            /* Each child owns a large simulation group. Its pthread workers
+             * use the selected process-local synchronization strategy, then
+             * the child sends one final Result to the parent. */
+            if (run_child_thread_group(&child_cfg, i, s, e, &local) != 0) {
+                _exit(1);
+            }
             if (cfg->ipc_mode == IPC_PIPE) {
                 ipc_write_result(pipes[i][1], &local);
                 close(pipes[i][1]);
